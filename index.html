@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#f5f1e8" />
+    <title>Nelson 英语周测</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <button id="backButton" class="icon-button hidden" aria-label="返回">←</button>
+        <div>
+          <p id="eyebrow">NELSON · WEEKLY CHECK</p>
+          <h1 id="pageTitle">周六英语测验</h1>
+        </div>
+        <button id="roleButton" class="role-button">家长</button>
+      </header>
+
+      <section id="studentHome" class="screen active">
+        <div class="date-line">
+          <span id="todayLabel"></span>
+          <span class="status-chip">WEEK 04</span>
+        </div>
+
+        <article class="exam-hero">
+          <p>本周正式测验</p>
+          <h2>25 题，看看哪些表达真正留下来了。</h2>
+          <div class="exam-meta">
+            <span>约 15 分钟</span><span>满分 100</span><span>提交后统一订正</span>
+          </div>
+          <button id="startWeeklyButton" class="primary-button">开始本周周测</button>
+        </article>
+
+        <article class="monthly-card">
+          <div>
+            <p>MONTHLY EXAM</p>
+            <h3>六月月考 · 40 题</h3>
+            <span>错题 16 · 重点词 14 · 语法 10</span>
+          </div>
+          <button id="startMonthlyButton">模拟月考</button>
+        </article>
+
+        <button id="pendingCorrectionCard" class="pending-correction-card hidden">
+          <span>订正未完成</span>
+          <div><strong id="pendingCorrectionTitle">上次还有错题需要订正</strong><small id="pendingCorrectionCount"></small></div>
+          <b>继续订正 →</b>
+        </button>
+
+        <section class="home-section">
+          <div class="section-heading">
+            <div><p>SCORE TRACK</p><h3>周测分数</h3></div>
+            <strong id="latestWeeklyScore">--</strong>
+          </div>
+          <div id="studentTrend" class="score-chart"></div>
+        </section>
+
+        <section class="home-section">
+          <div class="section-heading">
+            <div><p>FOCUS NEXT</p><h3>下周先复习这些</h3></div>
+            <button id="viewAdviceButton" class="text-button">查看全部</button>
+          </div>
+          <div id="studentFocusList" class="compact-focus-list"></div>
+        </section>
+      </section>
+
+      <section id="examScreen" class="screen">
+        <div class="exam-progress">
+          <div><span id="examTypeLabel">周测</span><strong id="questionCounter">1 / 25</strong></div>
+          <div class="progress-track"><i id="examProgressBar"></i></div>
+          <small id="examTimer">00:00</small>
+        </div>
+
+        <details id="questionNavigator" class="question-navigator">
+          <summary>题目导航 <span id="answeredCount">已答 0 / 25</span></summary>
+          <div id="questionGrid" class="question-grid"></div>
+        </details>
+
+        <article class="question-panel">
+          <div class="question-tags">
+            <span id="questionKind">句中拼写</span>
+            <span id="questionScope">本周新学</span>
+          </div>
+          <p id="questionInstruction"></p>
+          <h2 id="questionPrompt"></h2>
+          <div id="answerArea"></div>
+          <p id="answerRequiredMessage" class="answer-required-message hidden" role="alert">请先填写答案或做出选择，再进入下一题。</p>
+        </article>
+
+        <div class="exam-actions">
+          <button id="previousQuestionButton" class="secondary-button">上一题</button>
+          <button id="nextQuestionButton" class="primary-button">下一题</button>
+        </div>
+        <p class="autosave-note">答案会自动保存。交卷前不会显示正误。</p>
+      </section>
+
+      <section id="reviewScreen" class="screen">
+        <div class="result-hero">
+          <p id="resultTypeLabel">WEEKLY RESULT</p>
+          <div class="score-seal"><strong id="resultScore">0</strong><span>/ 100</span></div>
+          <h2 id="resultHeadline">本周成绩已保存</h2>
+          <p id="resultSummary"></p>
+        </div>
+        <div id="resultBreakdown" class="breakdown-grid"></div>
+        <div class="section-heading result-heading">
+          <div><p>CORRECTION</p><h3>逐题订正</h3></div>
+          <span id="incorrectCount"></span>
+        </div>
+        <div id="correctionList" class="correction-list"></div>
+        <div class="result-actions">
+          <button id="practiceRedoButton" class="secondary-button">不计分重做</button>
+          <button id="finishResultButton" class="primary-button">完成订正</button>
+        </div>
+      </section>
+
+      <section id="historyScreen" class="screen">
+        <div class="page-intro">
+          <p>RESULT ARCHIVE</p>
+          <h2>每一次成绩都留下来</h2>
+          <span>周测和月考分别统计，便于观察长期变化。</span>
+        </div>
+        <div class="history-tabs">
+          <button class="active" data-history-type="weekly">周测趋势</button>
+          <button data-history-type="monthly">月考趋势</button>
+        </div>
+        <div id="historySummary" class="history-summary"></div>
+        <div id="historyChart" class="score-chart large"></div>
+        <div id="historyList" class="history-list"></div>
+      </section>
+
+      <section id="parentScreen" class="screen">
+        <div class="parent-intro">
+          <p>PARENT DASHBOARD</p>
+          <h2>分数告诉我们变化，错误告诉我们下一步。</h2>
+        </div>
+
+        <div class="score-switch">
+          <button class="active" data-dashboard-type="weekly">周测</button>
+          <button data-dashboard-type="monthly">月考</button>
+        </div>
+        <div id="parentScoreCards" class="metric-grid"></div>
+        <section class="dashboard-card">
+          <div class="section-heading">
+            <div><p>TREND</p><h3 id="parentTrendTitle">周测成绩变化</h3></div>
+          </div>
+          <div id="parentTrend" class="score-chart large"></div>
+        </section>
+
+        <section class="dashboard-card">
+          <div class="section-heading">
+            <div><p>ABILITY</p><h3>能力分项</h3></div>
+          </div>
+          <div id="abilityList" class="ability-list"></div>
+        </section>
+
+        <section class="dashboard-card priority-card">
+          <div class="section-heading">
+            <div><p>REVIEW PRIORITY</p><h3>本周最需要复习</h3></div>
+            <span>可解释建议</span>
+          </div>
+          <div id="recommendationList" class="recommendation-list"></div>
+        </section>
+
+        <section class="dashboard-card">
+          <div class="section-heading">
+            <div><p>CHANGE LOG</p><h3>薄弱点变化</h3></div>
+          </div>
+          <div id="changeGroups" class="change-groups"></div>
+        </section>
+
+        <section class="dashboard-card draft-card">
+          <div class="section-heading">
+            <div><p>NEXT DRAFT</p><h3>下周试卷草稿</h3></div>
+            <span id="draftCount">0 / 5</span>
+          </div>
+          <p>从建议中加入的知识点会自动换用新的句子语境。</p>
+          <div id="draftList" class="draft-list"></div>
+        </section>
+
+        <button id="resetButton" class="reset-button">重置演示数据</button>
+      </section>
+
+      <nav id="studentNav" class="bottom-nav">
+        <button class="active" data-screen="studentHome"><span>01</span>测验</button>
+        <button data-screen="historyScreen"><span>02</span>成绩</button>
+        <button data-screen="parentScreen"><span>03</span>家长</button>
+      </nav>
+    </main>
+
+    <div id="submitModal" class="modal hidden" role="dialog" aria-modal="true">
+      <div class="modal-card">
+        <p>FINAL CHECK</p>
+        <h2>确认交卷？</h2>
+        <span id="submitModalCopy"></span>
+        <div>
+          <button id="cancelSubmitButton" class="secondary-button">继续检查</button>
+          <button id="confirmSubmitButton" class="primary-button">正式交卷</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="./week-data.js"></script>
+    <script src="./exam-engine.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>
