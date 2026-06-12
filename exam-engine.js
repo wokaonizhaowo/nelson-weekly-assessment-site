@@ -24,24 +24,71 @@
     return result >>> 0;
   }
 
+  function isQuestionUsed(question, used) {
+    return used.has(question.id) || used.has(`knowledge:${question.knowledgeId}`);
+  }
+
+  function markQuestionUsed(question, used) {
+    used.add(question.id);
+    used.add(`knowledge:${question.knowledgeId}`);
+  }
+
   function takeQuestions(bank, scope, count, salt, used) {
     const candidates = deterministicSort(
-      bank.filter((question) => question.scope === scope && !used.has(question.id)),
+      bank.filter((question) => question.scope === scope && !isQuestionUsed(question, used)),
       salt,
     );
     const selected = [];
     for (const question of candidates) {
       if (selected.length >= count) break;
       selected.push({ ...question });
-      used.add(question.id);
+      markQuestionUsed(question, used);
     }
     if (selected.length < count) {
-      const fallback = deterministicSort(bank.filter((question) => !used.has(question.id)), `${salt}:fallback`);
+      const fallback = deterministicSort(
+        bank.filter((question) => !isQuestionUsed(question, used)),
+        `${salt}:fallback`,
+      );
       for (const question of fallback) {
         if (selected.length >= count) break;
         selected.push({ ...question, scope });
-        used.add(question.id);
+        markQuestionUsed(question, used);
       }
+    }
+    return selected;
+  }
+
+  function takeBalancedQuestions(bank, scope, count, salt, used) {
+    const scoped = deterministicSort(
+      bank.filter((question) => question.scope === scope && !isQuestionUsed(question, used)),
+      salt,
+    );
+    const selected = [];
+    const days = [...new Set(scoped.map((question) => question.sourceDay).filter(Boolean))].sort(
+      (left, right) => left - right,
+    );
+    if (days.length) {
+      let round = 0;
+      while (selected.length < count) {
+        let added = 0;
+        for (const day of days) {
+          if (selected.length >= count) break;
+          const dayQuestions = scoped.filter(
+            (item) => item.sourceDay === day && !isQuestionUsed(item, used),
+          );
+          const question = dayQuestions[round];
+          if (question) {
+            selected.push({ ...question });
+            markQuestionUsed(question, used);
+            added += 1;
+          }
+        }
+        if (!added) break;
+        round += 1;
+      }
+    }
+    if (selected.length < count) {
+      selected.push(...takeQuestions(bank, scope, count - selected.length, `${salt}:fill`, used));
     }
     return selected;
   }
@@ -86,7 +133,7 @@
         .filter((question) => question.carryoverRank >= 0)
         .slice(0, 5)
         .map((question) => ({ ...question }));
-      carryovers.forEach((question) => used.add(question.id));
+      carryovers.forEach((question) => markQuestionUsed(question, used));
       const remainingMistakes = takeQuestions(
         mistakePool,
         "mistake",
@@ -95,8 +142,8 @@
         used,
       );
       questions = [
-        ...takeQuestions(bank, "recent", 13, `${salt}:recent`, used),
-        ...takeQuestions(bank, "previous", 7, `${salt}:previous`, used),
+        ...takeBalancedQuestions(bank, "recent", 13, `${salt}:recent`, used),
+        ...takeBalancedQuestions(bank, "previous", 7, `${salt}:previous`, used),
         ...carryovers,
         ...remainingMistakes,
       ];

@@ -1,6 +1,19 @@
 const STORAGE_KEY = "nelson-weekly-assessment-v1";
 const Engine = window.NelsonExamEngine;
-const bank = window.NELSON_WEEK_DATA.questions;
+const legacyData = window.NELSON_WEEK_DATA;
+const morningReadingData = window.NELSON_MORNING_READING_DATA;
+const morningQuestions = morningReadingData?.questions || [];
+const legacySupportQuestions = legacyData.questions.filter((question) =>
+  ["mistake", "monthly-vocabulary", "monthly-grammar"].includes(question.scope),
+);
+const bank = morningQuestions.length
+  ? [...morningQuestions, ...legacySupportQuestions]
+  : legacyData.questions;
+
+function currentWeekSalt(type = "weekly") {
+  const latestWeek = morningReadingData?.latestWeek || "2026-W24";
+  return type === "monthly" ? `${latestWeek}-month` : latestWeek;
+}
 
 const seededProfiles = {
   "word:adequate": {
@@ -123,7 +136,7 @@ function openStoredResult(result) {
     result.examType,
     bank,
     state.profiles,
-    result.examType === "monthly" ? "2026-06-month" : "2026-W24",
+    currentWeekSalt(result.examType),
   );
   activeExam.practiceMode = false;
   latestResult = result;
@@ -188,6 +201,7 @@ function renderHome() {
   elements.todayLabel.textContent = new Intl.DateTimeFormat("zh-CN", {
     month: "long", day: "numeric", weekday: "long",
   }).format(new Date());
+  elements.currentWeekLabel.textContent = morningReadingData?.latestLabel || legacyData.label;
   const weekly = resultSeries("weekly");
   elements.latestWeeklyScore.textContent = weekly.at(-1)?.score ?? "--";
   renderChart(elements.studentTrend, weekly.slice(-5));
@@ -202,8 +216,8 @@ function renderHome() {
   const nextSaturday = new Date();
   nextSaturday.setDate(nextSaturday.getDate() + ((6 - nextSaturday.getDay() + 7) % 7));
   const scheduledType = Engine.examTypeForDate(nextSaturday);
-  const weeklyExam = Engine.buildExam("weekly", bank, state.profiles, "2026-W24");
-  const monthlyExam = Engine.buildExam("monthly", bank, state.profiles, "2026-06-month");
+  const weeklyExam = Engine.buildExam("weekly", bank, state.profiles, currentWeekSalt("weekly"));
+  const monthlyExam = Engine.buildExam("monthly", bank, state.profiles, currentWeekSalt("monthly"));
   const weeklyCompleted = Boolean(findOfficialResult(weeklyExam.id));
   const monthlyCompleted = Boolean(findOfficialResult(monthlyExam.id));
   elements.startWeeklyButton.textContent = weeklyCompleted
@@ -241,7 +255,7 @@ function startExam(type) {
 }
 
 function startExamWithOptions(type, options = {}) {
-  activeExam = Engine.buildExam(type, bank, state.profiles, type === "monthly" ? "2026-06-month" : "2026-W24");
+  activeExam = Engine.buildExam(type, bank, state.profiles, currentWeekSalt(type));
   activeExam.practiceMode = Boolean(options.practice);
   const officialResult = findOfficialResult(activeExam.id);
   if (officialResult && !activeExam.practiceMode) {
@@ -342,7 +356,7 @@ function showRequiredMessage() {
 function scopeLabel(scope) {
   return {
     recent: "刚结束一周",
-    previous: "前一周巩固",
+    previous: morningReadingData?.previousWeek ? "前一周巩固" : "本周补充巩固",
     mistake: "历史错题",
     "monthly-vocabulary": "本月重点词",
     "monthly-grammar": "本月重点语法",
@@ -352,11 +366,17 @@ function scopeLabel(scope) {
 function renderQuestion() {
   const question = activeExam.questions[activeIndex];
   const total = activeExam.questions.length;
-  elements.examTypeLabel.textContent = activeExam.type === "monthly" ? "六月月考 · 40题" : "WEEK 04 · 25题";
+  elements.examTypeLabel.textContent =
+    activeExam.type === "monthly"
+      ? "月考 · 40题"
+      : `${morningReadingData?.latestLabel || legacyData.label} · 25题`;
   elements.questionCounter.textContent = `${activeIndex + 1} / ${total}`;
   elements.examProgressBar.style.width = `${((activeIndex + 1) / total) * 100}%`;
   elements.questionKind.textContent = question.kind;
-  elements.questionScope.textContent = scopeLabel(question.scope);
+  const sourceSuffix = question.sourceWeek
+    ? ` · ${question.sourceWeek}${question.sourceDay ? ` D${question.sourceDay}` : ""}`
+    : "";
+  elements.questionScope.textContent = `${scopeLabel(question.scope)}${sourceSuffix}`;
   elements.questionInstruction.textContent = question.instruction;
   elements.questionPrompt.textContent = question.prompt;
   const saved = answers[question.id] || "";

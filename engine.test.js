@@ -19,6 +19,27 @@ assert.deepEqual(
   { recent: 13, previous: 7, mistake: 5 },
 );
 
+global.NELSON_MORNING_READING_DATA = undefined;
+require("./morning-reading-data.js");
+const morningBank = [
+  ...global.NELSON_MORNING_READING_DATA.questions,
+  ...bank.filter((question) =>
+    ["mistake", "monthly-vocabulary", "monthly-grammar"].includes(question.scope),
+  ),
+];
+const weekThree = Engine.buildExam("weekly", morningBank, {}, "WEEK_03-test");
+const morningQuestions = weekThree.questions.filter((question) =>
+  ["recent", "previous"].includes(question.scope),
+);
+assert.equal(morningQuestions.length, 20);
+assert.deepEqual(
+  [...new Set(morningQuestions.map((question) => question.sourceDay))].sort(),
+  [1, 2, 3, 4, 5, 6, 7],
+);
+assert.equal(new Set(morningQuestions.map((question) => question.knowledgeId)).size, 20);
+assert.ok(morningQuestions.every((question) => question.sourceWeek === "WEEK_03"));
+assert.ok(morningQuestions.every((question) => question.translation));
+
 const monthly = Engine.buildExam("monthly", bank, {}, "test-month");
 assert.equal(monthly.questions.length, 40);
 assert.equal(monthly.points, 2.5);

@@ -36,3 +36,20 @@ python3 -m http.server 4173
 ```bash
 node engine.test.js
 ```
+
+## 与晨读自动化联动
+
+晨读自动化每周输出：
+
+`Nelson晨读自动化/输出/Nelson英语晨读_WEEK_XX_结构化数据.json`
+
+同步脚本读取输出目录中最新两周内容，并生成浏览器可直接加载的
+`morning-reading-data.js`：
+
+```bash
+cd "Nelson英语成长/weekly-assessment"
+python3 sync_morning_reading.py
+```
+
+周测的 13 道新近题来自最新一周晨读，7 道巩固题来自前一周晨读，另外 5 道来自历史错题。
+晨读生成脚本完成 DOCX/PDF/JSON 后会自动调用同步脚本，因此正常自动化运行时无需手动执行。
