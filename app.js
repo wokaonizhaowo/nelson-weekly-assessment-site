@@ -1,5 +1,6 @@
 const STORAGE_KEY = "nelson-weekly-assessment-v2";
 const Engine = window.NelsonExamEngine;
+const supabaseConfig = window.NELSON_SUPABASE_CONFIG;
 const legacyData = window.NELSON_WEEK_DATA;
 const morningReadingData = window.NELSON_MORNING_READING_DATA;
 const morningQuestions = morningReadingData?.questions || [];
@@ -32,6 +33,12 @@ let activeSince = 0;
 let timerId = null;
 let historyType = "weekly";
 let latestResult = null;
+let supabaseClient = null;
+let currentUser = null;
+let currentRole = null;
+let selectedLoginRole = "student";
+let cloudReady = false;
+let cloudSaveTimer = null;
 
 const elements = Object.fromEntries(
   [...document.querySelectorAll("[id]")].map((element) => [element.id, element]),
@@ -53,6 +60,138 @@ function loadState() {
 
 function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  scheduleCloudSave();
+}
+
+function scheduleCloudSave() {
+  if (!cloudReady || !currentUser || !supabaseClient) return;
+  window.clearTimeout(cloudSaveTimer);
+  cloudSaveTimer = window.setTimeout(syncStateToCloud, 500);
+}
+
+async function syncStateToCloud(force = false) {
+  if ((!cloudReady && !force) || !currentUser || !supabaseClient) return;
+  const { error } = await supabaseClient
+    .from("nelson_family_state")
+    .upsert({
+      family_id: supabaseConfig.familyId,
+      state,
+      updated_at: new Date().toISOString(),
+      updated_by: currentUser.id,
+    });
+  if (error) console.warn("Cloud sync failed:", error.message);
+}
+
+function normalizeState(value) {
+  return {
+    ...clone(defaultState),
+    ...(value || {}),
+    profiles: value?.profiles || {},
+    results: Array.isArray(value?.results) ? value.results : [],
+    drafts: Array.isArray(value?.drafts) ? value.drafts : [],
+    submittedExamIds: Array.isArray(value?.submittedExamIds) ? value.submittedExamIds : [],
+  };
+}
+
+async function loadStateFromCloud() {
+  const { data, error } = await supabaseClient
+    .from("nelson_family_state")
+    .select("state")
+    .eq("family_id", supabaseConfig.familyId)
+    .maybeSingle();
+  if (error) throw error;
+  if (data?.state) {
+    state = normalizeState(data.state);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } else {
+    await syncStateToCloud(true);
+  }
+}
+
+async function refreshStateFromCloud() {
+  if (!cloudReady || !currentUser || activeExam || !supabaseClient) return;
+  try {
+    await loadStateFromCloud();
+    const activeScreen = document.querySelector(".screen.active")?.id;
+    if (activeScreen) showScreen(activeScreen);
+  } catch (error) {
+    console.warn("Cloud refresh failed:", error.message);
+  }
+}
+
+function roleForUser(user) {
+  const email = user?.email?.toLowerCase();
+  if (email === supabaseConfig.accounts.parent) return "parent";
+  if (email === supabaseConfig.accounts.student) return "student";
+  return null;
+}
+
+function setLoginRole(role) {
+  selectedLoginRole = role;
+  elements.loginRoleSwitch.querySelectorAll("[data-login-role]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.loginRole === role);
+  });
+  elements.loginButton.textContent = role === "parent" ? "进入家长看板" : "进入测验";
+  elements.loginPassword.value = "";
+  elements.loginMessage.textContent = "";
+}
+
+function showLogin(role = "student", message = "") {
+  setLoginRole(role);
+  elements.loginMessage.textContent = message;
+  elements.loginModal.classList.remove("hidden");
+  window.setTimeout(() => elements.loginPassword.focus(), 50);
+}
+
+function applyRoleAccess() {
+  const isParent = currentRole === "parent";
+  elements.parentNavButton.classList.toggle("hidden", !isParent);
+  elements.roleButton.textContent = isParent ? "Nelson" : "家长";
+}
+
+async function activateSession(session) {
+  pauseExamTimer();
+  activeExam = null;
+  currentUser = session?.user || null;
+  currentRole = roleForUser(currentUser);
+  if (!currentRole) {
+    await supabaseClient.auth.signOut();
+    showLogin("student", "这个账号没有访问 Nelson 成长空间的权限。");
+    return;
+  }
+  cloudReady = false;
+  try {
+    await loadStateFromCloud();
+    cloudReady = true;
+    elements.loginModal.classList.add("hidden");
+    applyRoleAccess();
+    showScreen(currentRole === "parent" ? "parentScreen" : "studentHome");
+  } catch (error) {
+    showLogin(
+      currentRole,
+      error.code === "42P01"
+        ? "数据库尚未初始化，请家长先运行 supabase-setup.sql。"
+        : `云端连接失败：${error.message}`,
+    );
+  }
+}
+
+async function initializeCloud() {
+  if (!window.supabase?.createClient || !supabaseConfig) {
+    showLogin("student", "云端登录组件加载失败，请检查网络后刷新。");
+    return;
+  }
+  supabaseClient = window.supabase.createClient(
+    supabaseConfig.url,
+    supabaseConfig.publishableKey,
+    { auth: { persistSession: true, autoRefreshToken: true } },
+  );
+  const { data } = await supabaseClient.auth.getSession();
+  if (data.session) {
+    await activateSession(data.session);
+  } else {
+    showLogin("student");
+  }
 }
 
 function escapeHtml(value) {
@@ -119,6 +258,10 @@ function openStoredResult(result) {
 }
 
 function showScreen(id) {
+  if (id === "parentScreen" && currentRole !== "parent") {
+    showLogin("parent", "请输入家长密码后查看家长看板。");
+    return;
+  }
   screens.forEach((screen) => screen.classList.toggle("active", screen.id === id));
   const rootScreen = ["studentHome", "historyScreen", "parentScreen"].includes(id);
   elements.studentNav.classList.toggle("hidden", !rootScreen);
@@ -469,6 +612,7 @@ function renderResult(result) {
         ? "基础稳定，薄弱点已找到"
         : "这次结果会指导下一轮复习";
   elements.resultSummary.textContent = `用时 ${formatDuration(result.durationSeconds)}，答对 ${result.results.length - incorrect.length} / ${result.results.length} 题。`;
+  renderStudentAdvice(result);
   const labels = { spelling: "词汇拼写", collocation: "固定搭配", grammar: "词形语法" };
   elements.resultBreakdown.innerHTML = Object.entries(result.breakdown).map(([key, value]) => `
     <article><span>${labels[key] || key}</span><strong>${value}</strong><small>/ 100</small></article>
@@ -493,6 +637,34 @@ function renderResult(result) {
   });
   elements.practiceRedoButton.classList.toggle("hidden", !activeExam);
   updateCorrectionCompletion();
+}
+
+function renderStudentAdvice(result) {
+  const incorrect = result.results.filter((item) => !item.correct);
+  const correctCount = result.results.length - incorrect.length;
+  const recommendations = Engine.buildRecommendations(state.profiles, 3);
+  elements.studentAdviceTitle.textContent =
+    result.score >= 90
+      ? "非常扎实，继续保持这种认真"
+      : result.score >= 75
+        ? "大部分已经掌握，再补强几个点"
+        : "已经找到进步方向，一项一项攻克";
+  const actions = recommendations.length
+    ? recommendations.map((item) => ({
+        title: item.label,
+        copy: item.action,
+      }))
+    : incorrect.slice(0, 3).map((item) => ({
+        title: item.question.knowledge,
+        copy: item.question.category === "spelling"
+          ? "看中文拼写 2 次，再做 1 次句中补全"
+          : "复习规则和例句，再独立完成 2 次变式练习",
+      }));
+  elements.studentAdviceList.innerHTML = `
+    <p class="student-encouragement">你已经答对 ${correctCount} 题。${incorrect.length ? "订正不是惩罚，而是把不会的真正变成会的。" : "这次全部掌握，做得很棒。"}</p>
+    ${actions.map((item, index) => `
+      <article><span>${index + 1}</span><div><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.copy)}</small></div></article>
+    `).join("")}`;
 }
 
 function correctionInputMarkup(question) {
@@ -697,7 +869,10 @@ elements.previousQuestionButton.addEventListener("click", () => goQuestion(-1));
 elements.nextQuestionButton.addEventListener("click", () => goQuestion(1));
 elements.cancelSubmitButton.addEventListener("click", () => elements.submitModal.classList.add("hidden"));
 elements.confirmSubmitButton.addEventListener("click", submitExam);
-elements.finishResultButton.addEventListener("click", () => showScreen("studentHome"));
+elements.finishResultButton.addEventListener("click", () => {
+  activeExam = null;
+  showScreen("studentHome");
+});
 elements.practiceRedoButton.addEventListener("click", () => {
   const type = latestResult?.examType || activeExam?.type;
   if (type) startExamWithOptions(type, { practice: true });
@@ -706,7 +881,6 @@ elements.pendingCorrectionCard.addEventListener("click", () => {
   const result = state.results.find((item) => item.id === elements.pendingCorrectionCard.dataset.resultId);
   if (result) openStoredResult(result);
 });
-elements.viewAdviceButton.addEventListener("click", () => showScreen("parentScreen"));
 elements.backButton.addEventListener("click", () => {
   if (document.querySelector("#examScreen.active")) {
     persistCurrentAnswer();
@@ -714,7 +888,9 @@ elements.backButton.addEventListener("click", () => {
   }
   showScreen("studentHome");
 });
-elements.roleButton.addEventListener("click", () => showScreen(document.querySelector("#parentScreen.active") ? "studentHome" : "parentScreen"));
+elements.roleButton.addEventListener("click", () => {
+  showLogin(currentRole === "parent" ? "student" : "parent");
+});
 document.querySelectorAll("[data-screen]").forEach((button) => button.addEventListener("click", () => showScreen(button.dataset.screen)));
 document.querySelectorAll("[data-history-type]").forEach((button) => button.addEventListener("click", () => {
   historyType = button.dataset.historyType;
@@ -724,7 +900,37 @@ document.querySelectorAll("[data-history-type]").forEach((button) => button.addE
 elements.resetButton.addEventListener("click", () => {
   localStorage.removeItem(STORAGE_KEY);
   state = clone(defaultState);
+  saveState();
   renderParent();
+});
+elements.loginRoleSwitch.querySelectorAll("[data-login-role]").forEach((button) => {
+  button.addEventListener("click", () => setLoginRole(button.dataset.loginRole));
+});
+elements.loginForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const password = elements.loginPassword.value;
+  if (!password) return;
+  elements.loginButton.disabled = true;
+  elements.loginMessage.textContent = "正在登录并同步数据…";
+  try {
+    if (currentUser) await supabaseClient.auth.signOut();
+    cloudReady = false;
+    currentUser = null;
+    currentRole = null;
+    const { data, error } = await supabaseClient.auth.signInWithPassword({
+      email: supabaseConfig.accounts[selectedLoginRole],
+      password,
+    });
+    if (error) throw error;
+    await activateSession(data.session);
+  } catch (error) {
+    elements.loginMessage.textContent =
+      error.message === "Invalid login credentials"
+        ? "密码不正确，请再试一次。"
+        : `登录失败：${error.message}`;
+  } finally {
+    elements.loginButton.disabled = false;
+  }
 });
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
@@ -732,6 +938,7 @@ document.addEventListener("visibilitychange", () => {
     pauseExamTimer();
   } else {
     resumeExamTimer();
+    refreshStateFromCloud();
   }
 });
 window.addEventListener("pagehide", () => {
@@ -743,4 +950,4 @@ window.addEventListener("beforeunload", () => {
   pauseExamTimer();
 });
 
-showScreen("studentHome");
+initializeCloud();

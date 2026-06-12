@@ -26,10 +26,21 @@ python3 -m http.server 4173
 - 家长复习建议附带证据、典型错误和具体训练动作。
 - 家长可调节优先级，并把知识点加入下周试卷草稿。
 
-## 当前边界
+## Supabase 云端同步
 
-这是无需账号即可试用的前端 MVP。数据保存在当前浏览器；正式上线时将 `loadState/saveState`
-替换为 CloudBase 数据接口，并在服务端执行交卷防重、正式成绩写入和试卷版本冻结。
+网页使用 Supabase Auth 登录，并把 Nelson 与家长账号的数据同步到同一个家庭空间。
+
+1. 在 Supabase Dashboard 打开项目。
+2. 在 `SQL Editor` 运行 `supabase-setup.sql`。
+3. 在 `Authentication > Users` 创建两个用户：
+   - `nelson@nelson-study.app`
+   - `parent@nelson-study.app`
+4. 分别设置 Nelson 密码和家长密码。
+5. 在 Authentication 设置中关闭公开注册，只保留手动创建的用户。
+
+网页只要求选择身份并输入密码。公开仓库中只保存 publishable key，不保存密码、数据库密码或 service role key。
+
+同步内容包括成绩、逐题答案、错题订正、掌握档案、家长优先级调整和下周试卷草稿。本地存储仍保留缓存，答题中断时先保存在设备上，恢复页面后再同步。
 
 运行引擎测试：
 
