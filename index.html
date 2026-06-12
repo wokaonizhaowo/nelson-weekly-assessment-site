@@ -26,17 +26,17 @@
 
         <article class="exam-hero">
           <p>本周正式测验</p>
-          <h2>25 题，看看哪些表达真正留下来了。</h2>
+          <h2>看看本周新掌握了哪些单词？</h2>
           <div class="exam-meta">
-            <span>约 15 分钟</span><span>满分 100</span><span>提交后统一订正</span>
+            <span>25 题</span><span>约 15 分钟</span><span>满分 100</span>
           </div>
           <button id="startWeeklyButton" class="primary-button">开始本周周测</button>
         </article>
 
-        <article class="monthly-card">
+        <article id="monthlyCard" class="monthly-card hidden">
           <div>
             <p>MONTHLY EXAM</p>
-            <h3>六月月考 · 40 题</h3>
+            <h3 id="monthlyExamTitle">月考 · 40 题</h3>
             <span>错题 16 · 重点词 14 · 语法 10</span>
           </div>
           <button id="startMonthlyButton">模拟月考</button>
@@ -48,15 +48,7 @@
           <b>继续订正 →</b>
         </button>
 
-        <section class="home-section">
-          <div class="section-heading">
-            <div><p>SCORE TRACK</p><h3>周测分数</h3></div>
-            <strong id="latestWeeklyScore">--</strong>
-          </div>
-          <div id="studentTrend" class="score-chart"></div>
-        </section>
-
-        <section class="home-section">
+        <section id="studentFocusSection" class="home-section hidden">
           <div class="section-heading">
             <div><p>FOCUS NEXT</p><h3>下周先复习这些</h3></div>
             <button id="viewAdviceButton" class="text-button">查看全部</button>
@@ -132,29 +124,24 @@
       <section id="parentScreen" class="screen">
         <div class="parent-intro">
           <p>PARENT DASHBOARD</p>
-          <h2>分数告诉我们变化，错误告诉我们下一步。</h2>
+          <h2>先看最近一次测试，明确下一步怎么复习。</h2>
         </div>
 
-        <div class="score-switch">
-          <button class="active" data-dashboard-type="weekly">周测</button>
-          <button data-dashboard-type="monthly">月考</button>
-        </div>
-        <div id="parentScoreCards" class="metric-grid"></div>
-        <section class="dashboard-card">
+        <section class="dashboard-card analysis-card">
           <div class="section-heading">
-            <div><p>TREND</p><h3 id="parentTrendTitle">周测成绩变化</h3></div>
+            <div><p>LATEST ANALYSIS</p><h3>最近一次测试分析</h3></div>
           </div>
-          <div id="parentTrend" class="score-chart large"></div>
+          <div id="parentAnalysis" class="parent-analysis"></div>
         </section>
 
-        <section class="dashboard-card">
+        <section id="abilityCard" class="dashboard-card">
           <div class="section-heading">
             <div><p>ABILITY</p><h3>能力分项</h3></div>
           </div>
           <div id="abilityList" class="ability-list"></div>
         </section>
 
-        <section class="dashboard-card priority-card">
+        <section id="priorityCard" class="dashboard-card priority-card">
           <div class="section-heading">
             <div><p>REVIEW PRIORITY</p><h3>本周最需要复习</h3></div>
             <span>可解释建议</span>
@@ -162,14 +149,14 @@
           <div id="recommendationList" class="recommendation-list"></div>
         </section>
 
-        <section class="dashboard-card">
+        <section id="changeCard" class="dashboard-card">
           <div class="section-heading">
             <div><p>CHANGE LOG</p><h3>薄弱点变化</h3></div>
           </div>
           <div id="changeGroups" class="change-groups"></div>
         </section>
 
-        <section class="dashboard-card draft-card">
+        <section id="draftCard" class="dashboard-card draft-card">
           <div class="section-heading">
             <div><p>NEXT DRAFT</p><h3>下周试卷草稿</h3></div>
             <span id="draftCount">0 / 5</span>
@@ -178,7 +165,7 @@
           <div id="draftList" class="draft-list"></div>
         </section>
 
-        <button id="resetButton" class="reset-button">重置演示数据</button>
+        <button id="resetButton" class="reset-button">清除本机测试数据</button>
       </section>
 
       <nav id="studentNav" class="bottom-nav">

@@ -1,4 +1,4 @@
-const STORAGE_KEY = "nelson-weekly-assessment-v1";
+const STORAGE_KEY = "nelson-weekly-assessment-v2";
 const Engine = window.NelsonExamEngine;
 const legacyData = window.NELSON_WEEK_DATA;
 const morningReadingData = window.NELSON_MORNING_READING_DATA;
@@ -15,42 +15,9 @@ function currentWeekSalt(type = "weekly") {
   return type === "monthly" ? `${latestWeek}-month` : latestWeek;
 }
 
-const seededProfiles = {
-  "word:adequate": {
-    knowledgeId: "word:adequate", label: "adequate", category: "spelling", attempts: 4, errors: 3,
-    recentErrorStreak: 2, consecutiveCorrect: 0, monthlyErrors: 0, importance: 5, manualAdjustment: 0,
-    typicalWrongAnswer: "adquate", lastErrorAt: "2026-06-07T03:20:00.000Z", lastTestedAt: "2026-06-07T03:20:00.000Z",
-  },
-  "grammar:pay-attention-to": {
-    knowledgeId: "grammar:pay-attention-to", label: "pay attention to", category: "collocation", attempts: 3, errors: 2,
-    recentErrorStreak: 2, consecutiveCorrect: 0, monthlyErrors: 0, importance: 5, manualAdjustment: 0,
-    typicalWrongAnswer: "pay attention at", lastErrorAt: "2026-06-07T03:22:00.000Z", lastTestedAt: "2026-06-07T03:22:00.000Z",
-  },
-  "grammar:evidence-uncountable": {
-    knowledgeId: "grammar:evidence-uncountable", label: "evidence 不可数", category: "grammar", attempts: 3, errors: 2,
-    recentErrorStreak: 1, consecutiveCorrect: 0, monthlyErrors: 1, importance: 5, manualAdjustment: 0,
-    typicalWrongAnswer: "There are enough evidences", lastErrorAt: "2026-05-30T03:26:00.000Z", lastTestedAt: "2026-06-07T03:26:00.000Z",
-  },
-  "grammar:only-if-inversion": {
-    knowledgeId: "grammar:only-if-inversion", label: "Only if... 倒装", category: "grammar", attempts: 2, errors: 1,
-    recentErrorStreak: 1, consecutiveCorrect: 0, monthlyErrors: 1, importance: 5, manualAdjustment: 0,
-    typicalWrongAnswer: "Only if... vocabulary can", lastErrorAt: "2026-05-30T03:29:00.000Z", lastTestedAt: "2026-05-30T03:29:00.000Z",
-  },
-  "word:consistent": {
-    knowledgeId: "word:consistent", label: "consistent", category: "spelling", attempts: 3, errors: 1,
-    recentErrorStreak: 0, consecutiveCorrect: 2, monthlyErrors: 0, importance: 5, manualAdjustment: 0,
-    typicalWrongAnswer: "consistant", lastErrorAt: "2026-05-23T03:10:00.000Z", lastTestedAt: "2026-06-07T03:10:00.000Z",
-  },
-};
-
 const defaultState = {
-  profiles: seededProfiles,
-  results: [
-    { id: "w1", examType: "weekly", score: 68, durationSeconds: 902, submittedAt: "2026-05-16T03:30:00.000Z", breakdown: { spelling: 62, collocation: 70, grammar: 71 } },
-    { id: "w2", examType: "weekly", score: 72, durationSeconds: 865, submittedAt: "2026-05-23T03:30:00.000Z", breakdown: { spelling: 68, collocation: 75, grammar: 73 } },
-    { id: "m1", examType: "monthly", score: 70, durationSeconds: 1760, submittedAt: "2026-05-30T04:00:00.000Z", breakdown: { spelling: 72, collocation: 69, grammar: 67 } },
-    { id: "w3", examType: "weekly", score: 76, durationSeconds: 821, submittedAt: "2026-06-07T03:30:00.000Z", breakdown: { spelling: 73, collocation: 80, grammar: 75 } },
-  ],
+  profiles: {},
+  results: [],
   drafts: [],
   currentAttempt: null,
   submittedExamIds: [],
@@ -64,7 +31,6 @@ let elapsedSeconds = 0;
 let activeSince = 0;
 let timerId = null;
 let historyType = "weekly";
-let dashboardType = "weekly";
 let latestResult = null;
 
 const elements = Object.fromEntries(
@@ -106,6 +72,14 @@ function formatDuration(seconds) {
   const minutes = Math.floor(seconds / 60);
   const rest = seconds % 60;
   return `${minutes}:${String(rest).padStart(2, "0")}`;
+}
+
+function resultPeriodLabel(result) {
+  if (result.weekLabel) return result.weekLabel.replace("WEEK ", "W");
+  if (result.examType === "monthly") {
+    return `M${new Date(result.submittedAt).getMonth() + 1}`;
+  }
+  return "周测";
 }
 
 function findOfficialResult(examId) {
@@ -193,7 +167,7 @@ function renderChart(container, results) {
       <path class="chart-line" d="${path}" />
       ${points.map((point) => `<circle cx="${point.x}" cy="${point.y}" r="4"></circle><text x="${point.x}" y="${point.y - 10}">${point.item.score}</text>`).join("")}
     </svg>
-    <div class="chart-labels">${results.map((item) => `<span>${formatDate(item.submittedAt)}</span>`).join("")}</div>
+    <div class="chart-labels">${results.map((item) => `<span>${escapeHtml(resultPeriodLabel(item))}</span>`).join("")}</div>
   `;
 }
 
@@ -202,10 +176,8 @@ function renderHome() {
     month: "long", day: "numeric", weekday: "long",
   }).format(new Date());
   elements.currentWeekLabel.textContent = morningReadingData?.latestLabel || legacyData.label;
-  const weekly = resultSeries("weekly");
-  elements.latestWeeklyScore.textContent = weekly.at(-1)?.score ?? "--";
-  renderChart(elements.studentTrend, weekly.slice(-5));
   const recommendations = Engine.buildRecommendations(state.profiles, 3);
+  elements.studentFocusSection.classList.toggle("hidden", !recommendations.length);
   elements.studentFocusList.innerHTML = recommendations.map((item, index) => `
     <article>
       <span>${String(index + 1).padStart(2, "0")}</span>
@@ -220,19 +192,20 @@ function renderHome() {
   const monthlyExam = Engine.buildExam("monthly", bank, state.profiles, currentWeekSalt("monthly"));
   const weeklyCompleted = Boolean(findOfficialResult(weeklyExam.id));
   const monthlyCompleted = Boolean(findOfficialResult(monthlyExam.id));
+  const isMonthlyWeek = scheduledType === "monthly";
+  elements.monthlyExamTitle.textContent = `${nextSaturday.getMonth() + 1} 月月考 · 40 题`;
+  document.querySelector(".exam-hero").classList.toggle("hidden", isMonthlyWeek);
+  elements.monthlyCard.classList.toggle("hidden", !isMonthlyWeek);
   elements.startWeeklyButton.textContent = weeklyCompleted
     ? "查看本周成绩"
-    : scheduledType === "monthly"
-      ? "本周为月考周"
-      : state.currentAttempt?.examId === weeklyExam.id
+    : state.currentAttempt?.examId === weeklyExam.id
         ? "继续本周周测"
         : "开始本周周测";
-  elements.startWeeklyButton.disabled = scheduledType === "monthly" && !weeklyCompleted;
   elements.startMonthlyButton.textContent = monthlyCompleted
     ? "查看月考成绩"
     : state.currentAttempt?.examId === monthlyExam.id
       ? "继续月考"
-      : "模拟月考";
+      : "开始本月月考";
   const pendingCorrections = incompleteCorrectionResults();
   const latestPending = pendingCorrections[0];
   const totalPending = pendingCorrections.reduce((sum, item) => sum + item.pending, 0);
@@ -462,7 +435,14 @@ function openSubmitModal() {
 function submitExam() {
   if (!activeExam.practiceMode && state.submittedExamIds.includes(activeExam.id)) return;
   pauseExamTimer();
-  latestResult = Engine.scoreExam(activeExam, answers, 0, elapsedSeconds * 1000);
+  const submittedAt = Date.now();
+  latestResult = Engine.scoreExam(
+    activeExam,
+    answers,
+    submittedAt - elapsedSeconds * 1000,
+    submittedAt,
+  );
+  latestResult.weekLabel = morningReadingData?.latestLabel || legacyData.label;
   latestResult.practice = activeExam.practiceMode;
   if (!activeExam.practiceMode) {
     state.results.push(latestResult);
@@ -569,44 +549,70 @@ function updateCorrectionCompletion() {
 }
 
 function renderHistory() {
-  const results = resultSeries(historyType);
+  const results = resultSeries(historyType).slice(-10);
   const latest = results.at(-1);
   const average = results.length ? Math.round(results.reduce((sum, item) => sum + item.score, 0) / results.length) : 0;
+  elements.historySummary.classList.toggle("hidden", !results.length);
+  elements.historyChart.classList.toggle("hidden", !results.length);
   elements.historySummary.innerHTML = `
     <article><span>最近成绩</span><strong>${latest?.score ?? "--"}</strong></article>
     <article><span>平均分</span><strong>${average || "--"}</strong></article>
     <article><span>最高分</span><strong>${results.length ? Math.max(...results.map((item) => item.score)) : "--"}</strong></article>`;
   renderChart(elements.historyChart, results);
-  elements.historyList.innerHTML = [...results].reverse().map((result) => `
-    <article><time>${formatDate(result.submittedAt)}</time><div><strong>${result.examType === "monthly" ? "月考" : "周测"}</strong><small>用时 ${formatDuration(result.durationSeconds)}</small></div><b>${result.score}</b></article>
-  `).join("");
+  elements.historyList.innerHTML = results.length ? [...results].reverse().map((result) => `
+    <article><time>${formatDate(result.submittedAt)}</time><div><strong>${escapeHtml(resultPeriodLabel(result))} · ${result.examType === "monthly" ? "月考" : "周测"}</strong><small>用时 ${formatDuration(result.durationSeconds)}</small></div><b>${result.score}</b></article>
+  `).join("") : `<p class="empty-copy history-empty">完成第一次${historyType === "monthly" ? "月考" : "周测"}后，成绩会从这里开始记录。</p>`;
 }
 
 function renderParent() {
-  const results = resultSeries(dashboardType);
-  const latest = results.at(-1);
-  const previous = results.at(-2);
-  const average = results.length ? Math.round(results.reduce((sum, item) => sum + item.score, 0) / results.length) : 0;
-  const change = latest && previous ? latest.score - previous.score : 0;
-  elements.parentScoreCards.innerHTML = `
-    <article><span>最近成绩</span><strong>${latest?.score ?? "--"}</strong><small>${dashboardType === "monthly" ? "月考" : "周测"}百分制</small></article>
-    <article><span>较上次</span><strong class="${change < 0 ? "negative" : ""}">${change > 0 ? "+" : ""}${change || 0}</strong><small>分数变化</small></article>
-    <article><span>平均分</span><strong>${average || "--"}</strong><small>${results.length} 次有效记录</small></article>
-    <article><span>最高分</span><strong>${results.length ? Math.max(...results.map((item) => item.score)) : "--"}</strong><small>历史最佳</small></article>`;
-  elements.parentTrendTitle.textContent = dashboardType === "monthly" ? "月考成绩变化" : "周测成绩变化";
-  renderChart(elements.parentTrend, results);
+  const hasOfficialResult = state.results.some(
+    (result) => !result.practice && !result.abnormal && Array.isArray(result.results),
+  );
+  [elements.abilityCard, elements.priorityCard, elements.changeCard, elements.draftCard]
+    .forEach((card) => card.classList.toggle("hidden", !hasOfficialResult));
+  elements.resetButton.classList.toggle(
+    "hidden",
+    !hasOfficialResult && !state.currentAttempt && !state.drafts.length,
+  );
+  renderParentAnalysis();
   renderAbilities();
   renderRecommendations();
   renderChanges();
   renderDraft();
 }
 
-function renderAbilities() {
-  const latest = state.results.at(-1);
+function renderParentAnalysis() {
+  const latest = [...state.results]
+    .filter((result) => !result.practice && !result.abnormal && Array.isArray(result.results))
+    .sort((a, b) => new Date(a.submittedAt) - new Date(b.submittedAt))
+    .at(-1);
+  if (!latest) {
+    elements.parentAnalysis.innerHTML = `
+      <p class="empty-copy">目前还没有正式测试记录。完成 WEEK 3 周测后，这里会优先显示未掌握内容、优势项目和具体复习动作。</p>`;
+    return;
+  }
+  const incorrect = latest.results.filter((item) => !item.correct);
+  const correct = latest.results.filter((item) => item.correct);
+  const weakest = Object.entries(latest.breakdown).sort((a, b) => a[1] - b[1])[0];
+  const strongest = Object.entries(latest.breakdown).sort((a, b) => b[1] - a[1])[0];
   const labels = { spelling: "词汇拼写", collocation: "固定搭配", grammar: "词形与句法" };
-  const values = latest?.breakdown || { spelling: 73, collocation: 80, grammar: 75 };
+  const recommendations = Engine.buildRecommendations(state.profiles, 3);
+  elements.parentAnalysis.innerHTML = `
+    <div class="analysis-summary">
+      <span>${escapeHtml(resultPeriodLabel(latest))} · ${formatDate(latest.submittedAt)}</span>
+      <strong>${incorrect.length ? `有 ${incorrect.length} 个知识点需要继续巩固` : "本次所有知识点均已掌握"}</strong>
+    </div>
+    <article><b>还没掌握</b><p>${incorrect.slice(0, 6).map((item) => escapeHtml(item.question.knowledge)).join("、") || "暂无错题"}</p></article>
+    <article><b>掌握较好</b><p>${strongest ? `${labels[strongest[0]] || strongest[0]}表现最好（${strongest[1]}）` : ""}${correct.length ? `；已掌握 ${correct.slice(0, 4).map((item) => escapeHtml(item.question.knowledge)).join("、")}` : ""}</p></article>
+    <article><b>复习重点</b><p>${weakest ? `优先加强${labels[weakest[0]] || weakest[0]}` : "保持本周复习节奏"}${recommendations.length ? `；${recommendations.map((item) => escapeHtml(`${item.label}：${item.action}`)).join("；")}` : ""}</p></article>`;
+}
+
+function renderAbilities() {
+  const latest = [...state.results].filter((result) => !result.practice && !result.abnormal).at(-1);
+  const labels = { spelling: "词汇拼写", collocation: "固定搭配", grammar: "词形与句法" };
+  const values = latest?.breakdown || {};
   elements.abilityList.innerHTML = Object.entries(labels).map(([key, label]) => `
-    <div><span>${label}</span><strong>${values[key] ?? 0}</strong><i><b style="width:${values[key] ?? 0}%"></b></i></div>
+    <div><span>${label}</span><strong>${values[key] ?? "--"}</strong><i><b style="width:${values[key] ?? 0}%"></b></i></div>
   `).join("");
 }
 
@@ -616,7 +622,7 @@ function levelLabel(level) {
 
 function renderRecommendations() {
   const recommendations = Engine.buildRecommendations(state.profiles, 8);
-  elements.recommendationList.innerHTML = recommendations.map((item) => `
+  elements.recommendationList.innerHTML = recommendations.length ? recommendations.map((item) => `
     <article data-level="${item.level}">
       <div class="recommendation-top">
         <span>${levelLabel(item.level)}</span>
@@ -631,7 +637,7 @@ function renderRecommendations() {
         <button class="add-draft" data-add-draft="${escapeHtml(item.knowledgeId)}">加入下周试卷</button>
       </div>
     </article>
-  `).join("");
+  `).join("") : `<p class="empty-copy">最近一次测试没有形成需要优先复习的高频错项。</p>`;
   elements.recommendationList.querySelectorAll("[data-adjust]").forEach((button) => {
     button.addEventListener("click", () => {
       state.profiles[button.dataset.adjust].manualAdjustment += Number(button.dataset.delta);
@@ -714,11 +720,6 @@ document.querySelectorAll("[data-history-type]").forEach((button) => button.addE
   historyType = button.dataset.historyType;
   document.querySelectorAll("[data-history-type]").forEach((item) => item.classList.toggle("active", item === button));
   renderHistory();
-}));
-document.querySelectorAll("[data-dashboard-type]").forEach((button) => button.addEventListener("click", () => {
-  dashboardType = button.dataset.dashboardType;
-  document.querySelectorAll("[data-dashboard-type]").forEach((item) => item.classList.toggle("active", item === button));
-  renderParent();
 }));
 elements.resetButton.addEventListener("click", () => {
   localStorage.removeItem(STORAGE_KEY);
