@@ -507,11 +507,8 @@ function renderHome() {
   const pendingForScheduled = completedResult?.results?.filter(
     (item) => !item.correct && !item.corrected,
   ).length || 0;
-  const scheduledTasks = completedResult ? state.reviewTasks[completedResult.id] || [] : [];
   const testDone = Boolean(completedResult);
   const correctionDone = testDone && pendingForScheduled === 0;
-  const reviewDone = correctionDone &&
-    (!scheduledTasks.length || scheduledTasks.every((task) => task.completed));
   const taskLabel = isMonthlyWeek
     ? `${nextSaturday.getMonth() + 1} 月月考`
     : `${morningReadingData?.latestLabel?.replace("WEEK ", "W") || "本周"} 周测`;
@@ -519,13 +516,11 @@ function renderHome() {
   elements.todayTaskStatus.textContent = completedResult
     ? !correctionDone
       ? "待订正"
-      : !reviewDone
-        ? "待复习"
-        : "已完成"
+      : "已完成"
     : state.currentAttempt?.examId === scheduledExam.id
       ? "进行中"
       : "待完成";
-  elements.todayTaskStatus.dataset.status = reviewDone
+  elements.todayTaskStatus.dataset.status = correctionDone
     ? "done"
     : state.currentAttempt?.examId === scheduledExam.id
       ? "active"
@@ -535,15 +530,13 @@ function renderHome() {
   elements.todayTaskCopy.textContent = completedResult
     ? !correctionDone
       ? `测试已经提交，还有 ${pendingForScheduled} 题需要订正。`
-      : !reviewDone
-        ? `订正已经完成，还有 ${scheduledTasks.filter((task) => !task.completed).length} 项复习任务。`
-        : "测试、订正和复习任务均已完成。"
+      : "测试和订正均已完成，本周任务完成。"
     : isMonthlyWeek
       ? "预计 30 分钟，本周月考替代周测，完成测试和订正才算结束。"
       : "预计 15 分钟，完成测试和订正才算完成本周任务。";
-  const activeStep = !testDone ? 0 : !correctionDone ? 1 : !reviewDone ? 2 : -1;
-  elements.taskSteps.innerHTML = ["测试", "订正", "复习"].map((label, index) => {
-    const done = [testDone, correctionDone, reviewDone][index];
+  const activeStep = !testDone ? 0 : !correctionDone ? 1 : -1;
+  elements.taskSteps.innerHTML = ["测试", "订正"].map((label, index) => {
+    const done = [testDone, correctionDone][index];
     return `<span class="${done ? "done" : activeStep === index ? "active" : ""}">${done ? "✓ " : ""}${label}</span>`;
   }).join("");
   elements.monthlyExamTitle.textContent = `${nextSaturday.getMonth() + 1} 月月考 · 40 题`;
@@ -1006,7 +999,7 @@ function renderStudentAdvice(result) {
   const tasks = state.reviewTasks[result.id];
   const completed = tasks.filter((task) => task.completed).length;
   elements.studentAdviceList.innerHTML = `
-    <p class="student-encouragement">你已经答对 ${correctCount} 题。${incorrect.length ? "订正不是惩罚，而是把不会的真正变成会的。" : "这次全部掌握，做得很棒。"} 复习任务 ${completed}/${tasks.length}。</p>
+    <p class="student-encouragement">你已经答对 ${correctCount} 题。${incorrect.length ? "订正不是惩罚，而是把不会的真正变成会的。" : "这次全部掌握，做得很棒。"} 以下是可选复习建议 ${completed}/${tasks.length}。</p>
     ${tasks.map((task, index) => `
       <label class="${task.completed ? "completed" : ""}">
         <input type="checkbox" data-review-task="${escapeHtml(task.id)}" ${task.completed ? "checked" : ""}>
