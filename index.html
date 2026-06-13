@@ -15,7 +15,10 @@
           <p id="eyebrow">NELSON · WEEKLY CHECK</p>
           <h1 id="pageTitle">周六英语测验</h1>
         </div>
-        <button id="roleButton" class="role-button">家长</button>
+        <div class="account-controls">
+          <span id="syncStatus" class="sync-status" data-state="connecting">正在连接</span>
+          <button id="roleButton" class="role-button">家长</button>
+        </div>
       </header>
 
       <section id="studentHome" class="screen active">
@@ -23,6 +26,15 @@
           <span id="todayLabel"></span>
           <span id="currentWeekLabel" class="status-chip">WEEK 04</span>
         </div>
+
+        <article id="todayTaskCard" class="today-task-card">
+          <div>
+            <p>TODAY'S TASK</p>
+            <h2 id="todayTaskTitle">今天要完成：W3 周测</h2>
+          </div>
+          <span id="todayTaskStatus">待完成</span>
+          <p id="todayTaskCopy">预计 15 分钟，完成测试和订正才算完成本周任务。</p>
+        </article>
 
         <article class="exam-hero">
           <p>本周正式测验</p>
@@ -103,7 +115,8 @@
           <div><p>CORRECTION</p><h3>逐题订正</h3></div>
           <span id="incorrectCount"></span>
         </div>
-        <div id="correctionList" class="correction-list"></div>
+        <div id="correctionProgress" class="correction-progress"></div>
+        <div id="correctionList" class="correction-list correction-single"></div>
         <div class="result-actions">
           <button id="practiceRedoButton" class="secondary-button">不计分重做</button>
           <button id="finishResultButton" class="primary-button">完成订正</button>
@@ -194,14 +207,16 @@
         </label>
         <p id="loginMessage" class="login-message" role="alert"></p>
         <button id="loginButton" class="primary-button" type="submit">进入测验</button>
+        <button id="logoutButton" class="logout-button hidden" type="button">退出当前账号</button>
       </form>
     </div>
 
     <div id="submitModal" class="modal hidden" role="dialog" aria-modal="true">
       <div class="modal-card">
         <p>FINAL CHECK</p>
-        <h2>确认交卷？</h2>
+        <h2>交卷前再看一遍</h2>
         <span id="submitModalCopy"></span>
+        <div id="submitOverview" class="submit-overview"></div>
         <div>
           <button id="cancelSubmitButton" class="secondary-button">继续检查</button>
           <button id="confirmSubmitButton" class="primary-button">正式交卷</button>

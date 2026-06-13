@@ -20,6 +20,7 @@ const defaultState = {
   profiles: {},
   results: [],
   drafts: [],
+  reviewTasks: {},
   currentAttempt: null,
   submittedExamIds: [],
 };
@@ -39,6 +40,10 @@ let currentRole = null;
 let selectedLoginRole = "student";
 let cloudReady = false;
 let cloudSaveTimer = null;
+let correctionIndex = 0;
+let cloudUpdatedAt = null;
+let syncInProgress = false;
+let pendingCloudSave = false;
 
 const elements = Object.fromEntries(
   [...document.querySelectorAll("[id]")].map((element) => [element.id, element]),
@@ -60,6 +65,8 @@ function loadState() {
 
 function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  pendingCloudSave = true;
+  setSyncStatus("pending", "等待同步");
   scheduleCloudSave();
 }
 
@@ -69,17 +76,124 @@ function scheduleCloudSave() {
   cloudSaveTimer = window.setTimeout(syncStateToCloud, 500);
 }
 
-async function syncStateToCloud(force = false) {
-  if ((!cloudReady && !force) || !currentUser || !supabaseClient) return;
-  const { error } = await supabaseClient
-    .from("nelson_family_state")
-    .upsert({
-      family_id: supabaseConfig.familyId,
-      state,
-      updated_at: new Date().toISOString(),
-      updated_by: currentUser.id,
+function setSyncStatus(status, text) {
+  if (!elements.syncStatus) return;
+  elements.syncStatus.dataset.state = status;
+  elements.syncStatus.textContent = text;
+}
+
+function resultCorrectionCount(result) {
+  return result?.results?.filter((item) => item.corrected).length || 0;
+}
+
+function mergeResults(localResults = [], remoteResults = []) {
+  const merged = new Map(remoteResults.map((result) => [result.id, result]));
+  localResults.forEach((result) => {
+    const remote = merged.get(result.id);
+    if (!remote || resultCorrectionCount(result) >= resultCorrectionCount(remote)) {
+      merged.set(result.id, result);
+    }
+  });
+  return [...merged.values()].sort((a, b) => new Date(a.submittedAt) - new Date(b.submittedAt));
+}
+
+function mergeReviewTasks(localTasks = {}, remoteTasks = {}) {
+  const merged = clone(remoteTasks);
+  Object.entries(localTasks).forEach(([resultId, tasks]) => {
+    const tasksById = new Map((merged[resultId] || []).map((task) => [task.id, task]));
+    tasks.forEach((task) => {
+      const remote = tasksById.get(task.id);
+      tasksById.set(task.id, {
+        ...remote,
+        ...task,
+        completed: Boolean(remote?.completed || task.completed),
+      });
     });
-  if (error) console.warn("Cloud sync failed:", error.message);
+    merged[resultId] = [...tasksById.values()];
+  });
+  return merged;
+}
+
+function attemptProgress(attempt) {
+  if (!attempt) return -1;
+  const answered = Object.values(attempt.answers || {}).filter((value) => String(value).trim()).length;
+  return answered * 100000 + (attempt.elapsedSeconds || 0);
+}
+
+function mergeStates(localValue, remoteValue) {
+  const local = normalizeState(localValue);
+  const remote = normalizeState(remoteValue);
+  let currentAttempt = remote.currentAttempt || local.currentAttempt;
+  if (
+    local.currentAttempt &&
+    remote.currentAttempt &&
+    local.currentAttempt.examId === remote.currentAttempt.examId
+  ) {
+    currentAttempt = attemptProgress(local.currentAttempt) >= attemptProgress(remote.currentAttempt)
+      ? local.currentAttempt
+      : remote.currentAttempt;
+  }
+  return {
+    ...remote,
+    profiles: Object.keys(local.profiles).length >= Object.keys(remote.profiles).length
+      ? local.profiles
+      : remote.profiles,
+    results: mergeResults(local.results, remote.results),
+    drafts: [...new Map(
+      [...remote.drafts, ...local.drafts].map((item) => [item.knowledgeId, item]),
+    ).values()],
+    reviewTasks: mergeReviewTasks(local.reviewTasks, remote.reviewTasks),
+    currentAttempt,
+    submittedExamIds: [...new Set([...remote.submittedExamIds, ...local.submittedExamIds])],
+  };
+}
+
+async function syncStateToCloud(force = false) {
+  if ((!cloudReady && !force) || !currentUser || !supabaseClient || syncInProgress) return;
+  syncInProgress = true;
+  setSyncStatus("syncing", "正在同步");
+  try {
+    const nextUpdatedAt = new Date().toISOString();
+    let query = supabaseClient
+      .from("nelson_family_state")
+      .update({
+        state,
+        updated_at: nextUpdatedAt,
+        updated_by: currentUser.id,
+      })
+      .eq("family_id", supabaseConfig.familyId);
+    if (cloudUpdatedAt) query = query.eq("updated_at", cloudUpdatedAt);
+    const { data, error } = await query.select("updated_at").maybeSingle();
+    if (error) throw error;
+    if (!data) {
+      const { data: remote, error: readError } = await supabaseClient
+        .from("nelson_family_state")
+        .select("state, updated_at")
+        .eq("family_id", supabaseConfig.familyId)
+        .single();
+      if (readError) throw readError;
+      state = mergeStates(state, remote.state);
+      cloudUpdatedAt = remote.updated_at;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      pendingCloudSave = true;
+      setSyncStatus("conflict", "已合并新数据");
+      const activeScreen = document.querySelector(".screen.active")?.id;
+      if (["studentHome", "historyScreen", "parentScreen"].includes(activeScreen)) {
+        showScreen(activeScreen);
+      }
+      window.setTimeout(scheduleCloudSave, 300);
+      return;
+    }
+    cloudUpdatedAt = data.updated_at;
+    pendingCloudSave = false;
+    setSyncStatus("saved", "已同步");
+  } catch (error) {
+    pendingCloudSave = true;
+    setSyncStatus("offline", "等待网络");
+    console.warn("Cloud sync failed:", error.message);
+  } finally {
+    syncInProgress = false;
+  }
 }
 
 function normalizeState(value) {
@@ -89,6 +203,7 @@ function normalizeState(value) {
     profiles: value?.profiles || {},
     results: Array.isArray(value?.results) ? value.results : [],
     drafts: Array.isArray(value?.drafts) ? value.drafts : [],
+    reviewTasks: value?.reviewTasks || {},
     submittedExamIds: Array.isArray(value?.submittedExamIds) ? value.submittedExamIds : [],
   };
 }
@@ -96,25 +211,43 @@ function normalizeState(value) {
 async function loadStateFromCloud() {
   const { data, error } = await supabaseClient
     .from("nelson_family_state")
-    .select("state")
+    .select("state, updated_at")
     .eq("family_id", supabaseConfig.familyId)
     .maybeSingle();
   if (error) throw error;
   if (data?.state) {
     state = normalizeState(data.state);
+    cloudUpdatedAt = data.updated_at;
+    pendingCloudSave = false;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    setSyncStatus("saved", "已同步");
   } else {
-    await syncStateToCloud(true);
+    const createdAt = new Date().toISOString();
+    const { data: inserted, error: insertError } = await supabaseClient
+      .from("nelson_family_state")
+      .insert({
+        family_id: supabaseConfig.familyId,
+        state,
+        updated_at: createdAt,
+        updated_by: currentUser.id,
+      })
+      .select("updated_at")
+      .single();
+    if (insertError) throw insertError;
+    cloudUpdatedAt = inserted.updated_at;
+    pendingCloudSave = false;
+    setSyncStatus("saved", "已同步");
   }
 }
 
 async function refreshStateFromCloud() {
-  if (!cloudReady || !currentUser || activeExam || !supabaseClient) return;
+  if (!cloudReady || !currentUser || activeExam || !supabaseClient || pendingCloudSave) return;
   try {
     await loadStateFromCloud();
     const activeScreen = document.querySelector(".screen.active")?.id;
     if (activeScreen) showScreen(activeScreen);
   } catch (error) {
+    setSyncStatus("offline", "等待网络");
     console.warn("Cloud refresh failed:", error.message);
   }
 }
@@ -139,6 +272,7 @@ function setLoginRole(role) {
 function showLogin(role = "student", message = "") {
   setLoginRole(role);
   elements.loginMessage.textContent = message;
+  elements.logoutButton.classList.toggle("hidden", !currentUser);
   elements.loginModal.classList.remove("hidden");
   window.setTimeout(() => elements.loginPassword.focus(), 50);
 }
@@ -146,7 +280,7 @@ function showLogin(role = "student", message = "") {
 function applyRoleAccess() {
   const isParent = currentRole === "parent";
   elements.parentNavButton.classList.toggle("hidden", !isParent);
-  elements.roleButton.textContent = isParent ? "Nelson" : "家长";
+  elements.roleButton.textContent = isParent ? "切换" : "账号";
 }
 
 async function activateSession(session) {
@@ -160,6 +294,7 @@ async function activateSession(session) {
     return;
   }
   cloudReady = false;
+  setSyncStatus("connecting", "正在连接");
   try {
     await loadStateFromCloud();
     cloudReady = true;
@@ -336,6 +471,36 @@ function renderHome() {
   const weeklyCompleted = Boolean(findOfficialResult(weeklyExam.id));
   const monthlyCompleted = Boolean(findOfficialResult(monthlyExam.id));
   const isMonthlyWeek = scheduledType === "monthly";
+  const scheduledExam = isMonthlyWeek ? monthlyExam : weeklyExam;
+  const completedResult = findOfficialResult(scheduledExam.id);
+  const pendingForScheduled = completedResult?.results?.filter(
+    (item) => !item.correct && !item.corrected,
+  ).length || 0;
+  const taskLabel = isMonthlyWeek
+    ? `${nextSaturday.getMonth() + 1} 月月考`
+    : `${morningReadingData?.latestLabel?.replace("WEEK ", "W") || "本周"} 周测`;
+  elements.todayTaskTitle.textContent = `今天要完成：${taskLabel}`;
+  elements.todayTaskStatus.textContent = completedResult
+    ? pendingForScheduled
+      ? "待订正"
+      : "已完成"
+    : state.currentAttempt?.examId === scheduledExam.id
+      ? "进行中"
+      : "待完成";
+  elements.todayTaskStatus.dataset.status = completedResult && !pendingForScheduled
+    ? "done"
+    : state.currentAttempt?.examId === scheduledExam.id
+      ? "active"
+      : pendingForScheduled
+        ? "correction"
+        : "pending";
+  elements.todayTaskCopy.textContent = completedResult
+    ? pendingForScheduled
+      ? `测试已经提交，还有 ${pendingForScheduled} 题需要订正。订正完成才算完成本周任务。`
+      : "本周任务已全部完成。可以查看成绩和复习任务。"
+    : isMonthlyWeek
+      ? "预计 30 分钟，本周月考替代周测，完成测试和订正才算结束。"
+      : "预计 15 分钟，完成测试和订正才算完成本周任务。";
   elements.monthlyExamTitle.textContent = `${nextSaturday.getMonth() + 1} 月月考 · 40 题`;
   document.querySelector(".exam-hero").classList.toggle("hidden", isMonthlyWeek);
   elements.monthlyCard.classList.toggle("hidden", !isMonthlyWeek);
@@ -571,7 +736,21 @@ function openSubmitModal() {
   const unanswered = activeExam.questions.filter((question) => !answers[question.id]).length;
   elements.submitModalCopy.textContent = unanswered
     ? `还有 ${unanswered} 题未作答。正式提交后成绩不能修改。`
-    : "所有题目都已作答。正式提交后成绩不能修改。";
+    : `已完成 ${activeExam.questions.length} 题。点击题号可返回修改，确认后再正式交卷。`;
+  elements.submitOverview.innerHTML = activeExam.questions.map((question, index) => {
+    const answered = Boolean(String(answers[question.id] || "").trim());
+    return `<button type="button" class="${answered ? "answered" : "unanswered"}" data-submit-question="${index}" aria-label="返回第 ${index + 1} 题">${index + 1}</button>`;
+  }).join("");
+  elements.submitOverview.querySelectorAll("[data-submit-question]").forEach((button) => {
+    button.addEventListener("click", () => {
+      activeIndex = Number(button.dataset.submitQuestion);
+      state.currentAttempt.activeIndex = activeIndex;
+      saveState();
+      elements.submitModal.classList.add("hidden");
+      renderQuestion();
+    });
+  });
+  elements.confirmSubmitButton.disabled = unanswered > 0;
   elements.submitModal.classList.remove("hidden");
 }
 
@@ -618,23 +797,8 @@ function renderResult(result) {
     <article><span>${labels[key] || key}</span><strong>${value}</strong><small>/ 100</small></article>
   `).join("");
   elements.incorrectCount.textContent = `${incorrect.length} 处需要订正`;
-  elements.correctionList.innerHTML = incorrect.length ? incorrect.map((item, index) => `
-    <article data-correction-index="${index}">
-      <div><span>${escapeHtml(item.question.kind)}</span><strong>${escapeHtml(item.question.knowledge)}</strong></div>
-      <p>${escapeHtml(item.question.prompt)}</p>
-      <p class="correction-translation">中文：${escapeHtml(questionTranslation(item.question))}</p>
-      <div class="correction-reference ${item.corrected ? "hidden" : ""}">
-        <small>你的答案</small><b class="wrong-answer">${escapeHtml(item.userAnswer || "未作答")}</b>
-        <small>正确答案</small><b>${escapeHtml(item.question.answer)}</b>
-        <em>${escapeHtml(item.question.explanation)}</em>
-      </div>
-      <div class="correction-retry ${item.corrected ? "" : "hidden"}">${item.corrected ? `<span class="correction-feedback correct">订正已完成，后续测试还会再次独立考查。</span>` : ""}</div>
-      <button class="correction-start-button ${item.corrected ? "hidden" : ""}" data-start-correction="${index}">看懂了，隐藏答案再答一次</button>
-    </article>
-  `).join("") : `<p class="empty-copy">全部答对，这次没有需要订正的题目。</p>`;
-  elements.correctionList.querySelectorAll("[data-start-correction]").forEach((button) => {
-    button.addEventListener("click", () => startCorrectionRetry(incorrect[Number(button.dataset.startCorrection)], button));
-  });
+  correctionIndex = Math.max(0, incorrect.findIndex((item) => !item.corrected));
+  renderCorrectionStep(result);
   elements.practiceRedoButton.classList.toggle("hidden", !activeExam);
   updateCorrectionCompletion();
 }
@@ -660,11 +824,35 @@ function renderStudentAdvice(result) {
           ? "看中文拼写 2 次，再做 1 次句中补全"
           : "复习规则和例句，再独立完成 2 次变式练习",
       }));
+  if (!state.reviewTasks[result.id]) {
+    state.reviewTasks[result.id] = actions.map((item, index) => ({
+      id: `${result.id}-task-${index + 1}`,
+      title: item.title,
+      copy: item.copy,
+      completed: false,
+    }));
+    saveState();
+  }
+  const tasks = state.reviewTasks[result.id];
+  const completed = tasks.filter((task) => task.completed).length;
   elements.studentAdviceList.innerHTML = `
-    <p class="student-encouragement">你已经答对 ${correctCount} 题。${incorrect.length ? "订正不是惩罚，而是把不会的真正变成会的。" : "这次全部掌握，做得很棒。"}</p>
-    ${actions.map((item, index) => `
-      <article><span>${index + 1}</span><div><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.copy)}</small></div></article>
+    <p class="student-encouragement">你已经答对 ${correctCount} 题。${incorrect.length ? "订正不是惩罚，而是把不会的真正变成会的。" : "这次全部掌握，做得很棒。"} 复习任务 ${completed}/${tasks.length}。</p>
+    ${tasks.map((task, index) => `
+      <label class="${task.completed ? "completed" : ""}">
+        <input type="checkbox" data-review-task="${escapeHtml(task.id)}" ${task.completed ? "checked" : ""}>
+        <span>${task.completed ? "✓" : index + 1}</span>
+        <div><strong>${escapeHtml(task.title)}</strong><small>${escapeHtml(task.copy)}</small></div>
+      </label>
     `).join("")}`;
+  elements.studentAdviceList.querySelectorAll("[data-review-task]").forEach((checkbox) => {
+    checkbox.addEventListener("change", () => {
+      const task = tasks.find((item) => item.id === checkbox.dataset.reviewTask);
+      if (!task) return;
+      task.completed = checkbox.checked;
+      saveState();
+      renderStudentAdvice(result);
+    });
+  });
 }
 
 function correctionInputMarkup(question) {
@@ -676,8 +864,49 @@ function correctionInputMarkup(question) {
   return `<input class="correction-text-input" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="重新填写答案">`;
 }
 
-function startCorrectionRetry(item, button) {
-  const card = button.closest("[data-correction-index]");
+function renderCorrectionStep(result) {
+  const incorrect = result.results.filter((item) => !item.correct);
+  if (!incorrect.length) {
+    elements.correctionProgress.innerHTML = "";
+    elements.correctionList.innerHTML = `<p class="empty-copy">全部答对，这次没有需要订正的题目。</p>`;
+    return;
+  }
+  const completed = incorrect.filter((item) => item.corrected).length;
+  if (completed === incorrect.length) {
+    elements.correctionProgress.innerHTML = `<strong>订正完成</strong><span>${completed} / ${incorrect.length}</span>`;
+    elements.correctionList.innerHTML = `
+      <div class="correction-complete">
+        <strong>所有错题都已重新答对</strong>
+        <p>很好。下周会用新的句子语境再次考查这些知识点。</p>
+      </div>`;
+    return;
+  }
+  if (correctionIndex < 0 || correctionIndex >= incorrect.length || incorrect[correctionIndex].corrected) {
+    correctionIndex = incorrect.findIndex((item) => !item.corrected);
+  }
+  const item = incorrect[correctionIndex];
+  elements.correctionProgress.innerHTML = `
+    <strong>第 ${completed + 1} / ${incorrect.length} 题</strong>
+    <span>已完成 ${completed} 题</span>`;
+  elements.correctionList.innerHTML = `
+    <article data-correction-step>
+      <div class="correction-card-head"><span>${escapeHtml(item.question.kind)}</span><strong>${escapeHtml(item.question.knowledge)}</strong></div>
+      <p>${escapeHtml(item.question.prompt)}</p>
+      <p class="correction-translation">中文：${escapeHtml(questionTranslation(item.question))}</p>
+      <div class="correction-reference">
+        <small>你的答案</small><b class="wrong-answer">${escapeHtml(item.userAnswer || "未作答")}</b>
+        <small>正确答案</small><b>${escapeHtml(item.question.answer)}</b>
+        <em>${escapeHtml(item.question.explanation)}</em>
+      </div>
+      <div class="correction-retry hidden"></div>
+      <button class="correction-start-button" data-start-current-correction>我明白了，隐藏答案再答一次</button>
+    </article>`;
+  const startButton = elements.correctionList.querySelector("[data-start-current-correction]");
+  startButton.addEventListener("click", () => startCurrentCorrectionRetry(result, item, startButton));
+}
+
+function startCurrentCorrectionRetry(result, item, button) {
+  const card = button.closest("[data-correction-step]");
   card.querySelector(".correction-reference").classList.add("hidden");
   button.classList.add("hidden");
   const retry = card.querySelector(".correction-retry");
@@ -700,21 +929,27 @@ function startCorrectionRetry(item, button) {
     const correct = (item.question.accepted || [item.question.answer]).some(
       (answer) => Engine.normalizeAnswer(value) === Engine.normalizeAnswer(answer),
     );
-    feedback.textContent = correct ? "订正完成。后续测试还会再次独立考查。" : "还不正确，请再检查一次。";
+    feedback.textContent = correct ? "答对了，正在进入下一题…" : "还不正确，请再检查一次。";
     feedback.className = `correction-feedback ${correct ? "correct" : "incorrect"}`;
     if (correct) {
       retry.querySelectorAll("input, button").forEach((element) => { element.disabled = true; });
       item.corrected = true;
       saveState();
       updateCorrectionCompletion();
+      window.setTimeout(() => {
+        correctionIndex += 1;
+        renderCorrectionStep(result);
+        updateCorrectionCompletion();
+        elements.correctionList.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 650);
     }
   });
   retry.querySelector("input")?.focus();
 }
 
 function updateCorrectionCompletion() {
-  const pending = elements.correctionList.querySelectorAll("[data-correction-index]").length -
-    elements.correctionList.querySelectorAll(".correction-feedback.correct").length;
+  const result = latestResult;
+  const pending = result?.results?.filter((item) => !item.correct && !item.corrected).length || 0;
   elements.finishResultButton.disabled = pending > 0;
   elements.practiceRedoButton.disabled = pending > 0;
   elements.finishResultButton.textContent = pending > 0 ? `还需完成 ${pending} 题订正` : "完成订正";
@@ -740,12 +975,15 @@ function renderParent() {
   const hasOfficialResult = state.results.some(
     (result) => !result.practice && !result.abnormal && Array.isArray(result.results),
   );
+  const locked = Boolean(state.currentAttempt);
   [elements.abilityCard, elements.priorityCard, elements.changeCard, elements.draftCard]
     .forEach((card) => card.classList.toggle("hidden", !hasOfficialResult));
   elements.resetButton.classList.toggle(
     "hidden",
     !hasOfficialResult && !state.currentAttempt && !state.drafts.length,
   );
+  elements.resetButton.disabled = locked;
+  elements.resetButton.textContent = locked ? "Nelson 答题中，暂不可清除数据" : "清除本机测试数据";
   renderParentAnalysis();
   renderAbilities();
   renderRecommendations();
@@ -754,12 +992,16 @@ function renderParent() {
 }
 
 function renderParentAnalysis() {
+  const lockNote = state.currentAttempt
+    ? `<div class="parent-lock-note">Nelson 正在答题。当前可查看分析，但调整优先级、试卷草稿和清除数据已暂时锁定，交卷后自动恢复。</div>`
+    : "";
   const latest = [...state.results]
     .filter((result) => !result.practice && !result.abnormal && Array.isArray(result.results))
     .sort((a, b) => new Date(a.submittedAt) - new Date(b.submittedAt))
     .at(-1);
   if (!latest) {
     elements.parentAnalysis.innerHTML = `
+      ${lockNote}
       <p class="empty-copy">目前还没有正式测试记录。完成 WEEK 3 周测后，这里会优先显示未掌握内容、优势项目和具体复习动作。</p>`;
     return;
   }
@@ -770,6 +1012,7 @@ function renderParentAnalysis() {
   const labels = { spelling: "词汇拼写", collocation: "固定搭配", grammar: "词形与句法" };
   const recommendations = Engine.buildRecommendations(state.profiles, 3);
   elements.parentAnalysis.innerHTML = `
+    ${lockNote}
     <div class="analysis-summary">
       <span>${escapeHtml(resultPeriodLabel(latest))} · ${formatDate(latest.submittedAt)}</span>
       <strong>${incorrect.length ? `有 ${incorrect.length} 个知识点需要继续巩固` : "本次所有知识点均已掌握"}</strong>
@@ -794,6 +1037,7 @@ function levelLabel(level) {
 
 function renderRecommendations() {
   const recommendations = Engine.buildRecommendations(state.profiles, 8);
+  const locked = Boolean(state.currentAttempt);
   elements.recommendationList.innerHTML = recommendations.length ? recommendations.map((item) => `
     <article data-level="${item.level}">
       <div class="recommendation-top">
@@ -804,9 +1048,9 @@ function renderRecommendations() {
       <p>${escapeHtml(item.action)}</p>
       <small>${escapeHtml(item.evidence)}${item.typicalWrongAnswer ? `；典型错误：${escapeHtml(item.typicalWrongAnswer)}` : ""}</small>
       <div class="recommendation-actions">
-        <button data-adjust="${escapeHtml(item.knowledgeId)}" data-delta="-10">降低</button>
-        <button data-adjust="${escapeHtml(item.knowledgeId)}" data-delta="10">提高</button>
-        <button class="add-draft" data-add-draft="${escapeHtml(item.knowledgeId)}">加入下周试卷</button>
+        <button data-adjust="${escapeHtml(item.knowledgeId)}" data-delta="-10" ${locked ? "disabled" : ""}>降低</button>
+        <button data-adjust="${escapeHtml(item.knowledgeId)}" data-delta="10" ${locked ? "disabled" : ""}>提高</button>
+        <button class="add-draft" data-add-draft="${escapeHtml(item.knowledgeId)}" ${locked ? "disabled" : ""}>加入下周试卷</button>
       </div>
     </article>
   `).join("") : `<p class="empty-copy">最近一次测试没有形成需要优先复习的高频错项。</p>`;
@@ -837,6 +1081,7 @@ function renderChanges() {
 }
 
 function addToDraft(knowledgeId) {
+  if (state.currentAttempt) return;
   if (state.drafts.some((item) => item.knowledgeId === knowledgeId)) return;
   const source = bank.find((question) => question.knowledgeId === knowledgeId);
   const profile = state.profiles[knowledgeId];
@@ -850,9 +1095,10 @@ function addToDraft(knowledgeId) {
 }
 
 function renderDraft() {
+  const locked = Boolean(state.currentAttempt);
   elements.draftCount.textContent = `${state.drafts.length} / 5`;
   elements.draftList.innerHTML = state.drafts.length ? state.drafts.map((item) => `
-    <article><div><strong>${escapeHtml(item.label)}</strong><small>${escapeHtml(item.variantPrompt)}</small></div><button data-remove-draft="${escapeHtml(item.knowledgeId)}">移除</button></article>
+    <article><div><strong>${escapeHtml(item.label)}</strong><small>${escapeHtml(item.variantPrompt)}</small></div><button data-remove-draft="${escapeHtml(item.knowledgeId)}" ${locked ? "disabled" : ""}>移除</button></article>
   `).join("") : `<p class="empty-copy">尚未手动加入知识点。系统仍会自动选择 5 道历史错题。</p>`;
   elements.draftList.querySelectorAll("[data-remove-draft]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -898,10 +1144,21 @@ document.querySelectorAll("[data-history-type]").forEach((button) => button.addE
   renderHistory();
 }));
 elements.resetButton.addEventListener("click", () => {
+  if (state.currentAttempt) return;
   localStorage.removeItem(STORAGE_KEY);
   state = clone(defaultState);
   saveState();
   renderParent();
+});
+elements.logoutButton.addEventListener("click", async () => {
+  await supabaseClient.auth.signOut();
+  cloudReady = false;
+  currentUser = null;
+  currentRole = null;
+  cloudUpdatedAt = null;
+  pendingCloudSave = false;
+  elements.logoutButton.classList.add("hidden");
+  showLogin("student", "已退出当前账号。");
 });
 elements.loginRoleSwitch.querySelectorAll("[data-login-role]").forEach((button) => {
   button.addEventListener("click", () => setLoginRole(button.dataset.loginRole));
@@ -936,6 +1193,7 @@ document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
     persistCurrentAnswer();
     pauseExamTimer();
+    syncStateToCloud();
   } else {
     resumeExamTimer();
     refreshStateFromCloud();
@@ -944,6 +1202,7 @@ document.addEventListener("visibilitychange", () => {
 window.addEventListener("pagehide", () => {
   persistCurrentAnswer();
   pauseExamTimer();
+  syncStateToCloud();
 });
 window.addEventListener("beforeunload", () => {
   persistCurrentAnswer();
@@ -951,3 +1210,4 @@ window.addEventListener("beforeunload", () => {
 });
 
 initializeCloud();
+window.setInterval(refreshStateFromCloud, 15000);
