@@ -6,12 +6,15 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SOURCE = ROOT / "Nelson晨读自动化" / "输出"
 DEFAULT_OUTPUT = Path(__file__).resolve().parent / "morning-reading-data.js"
+QUALITY_TEST = Path(__file__).resolve().parent / "content_quality_test.py"
 
 
 def week_number(path: Path) -> int:
@@ -48,6 +51,7 @@ def build_context_question(
     index: int,
 ) -> dict:
     answer = context["answer"]
+    knowledge_id = context.get("knowledgeId", f"word:{answer.lower()}")
     source_week = week.get("weekId", week.get("label", "unknown"))
     source_day = day.get("day")
     translation = context.get("translation") or (
@@ -56,8 +60,8 @@ def build_context_question(
     )
     return {
         "id": f"{source_week}-day{source_day}-context{index}",
-        "knowledgeId": f"word:{answer.lower()}",
-        "knowledge": answer,
+        "knowledgeId": knowledge_id,
+        "knowledge": word.get("word", answer),
         "prompt": clean_prompt(context["prompt"]),
         "instruction": f"根据中文提示「{chinese_hint(context['prompt'], word.get('meaning', answer))}」补全单词。",
         "type": "input",
@@ -96,7 +100,11 @@ def build_questions(week: dict, scope: str) -> list[dict]:
             questions.append(
                 build_context_question(
                     context,
-                    words.get(context["answer"].lower(), {}),
+                    words.get(
+                        context.get("knowledgeId", "").removeprefix("word:")
+                        or context["answer"].lower(),
+                        {},
+                    ),
                     week,
                     day,
                     scope,
@@ -139,6 +147,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--latest-week", type=int)
     args = parser.parse_args()
+    subprocess.run([sys.executable, str(QUALITY_TEST)], check=True)
     payload = build_payload(load_weeks(args.source, args.latest_week))
     args.output.write_text(
         "(function (root) {\n"

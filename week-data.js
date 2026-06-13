@@ -105,7 +105,7 @@
 
   const grammarQuestions = [
     ["grammar:evidence-uncountable", "evidence 不可数", "There _____ enough evidence to support the conclusion.", ["is", "are", "were", "have"], "is", "evidence 通常是不可数名词，谓语使用单数。", "有足够的证据支持这个结论。"],
-    ["grammar:only-if-inversion", "Only if 倒装", "Only if we review regularly _____ vocabulary become writing ability.", ["can", "it can", "vocabulary can", "can it"], "can", "Only if 位于句首时，主句使用部分倒装：can vocabulary become...", "只有定期复习，词汇才能转化为写作能力。"],
+    ["grammar:only-if-inversion", "Only if 倒装", "Only if we review regularly _____ vocabulary knowledge be transformed into writing competence.", ["can", "it can", "vocabulary can", "can it"], "can", "Only if 位于句首时，主句使用部分倒装：can vocabulary knowledge be transformed...", "只有定期复习，词汇知识才能转化为写作能力。"],
     ["grammar:ensure-that", "ensure that 从句", "We must ensure that Nelson _____ adequate sleep.", ["get", "gets", "getting", "to get"], "gets", "that 从句主语 Nelson 是第三人称单数。", "我们必须确保 Nelson 获得充足的睡眠。"],
     ["grammar:pay-attention-to", "pay attention to", "Please pay attention _____ the verb form.", ["at", "for", "to", "with"], "to", "pay attention to 是固定搭配，to 是介词。", "请注意动词的形式。"],
     ["grammar:rely-on", "rely on", "We should not rely _____ translation software completely.", ["in", "at", "on", "for"], "on", "rely on/upon 表示“依赖”。", "我们不应该完全依赖翻译软件。"],
@@ -113,7 +113,7 @@
     ["grammar:because-of", "because of", "_____ consistent practice, Nelson is making progress.", ["Because", "Because of", "Although", "Unless"], "Because of", "because of 后接名词短语；because 后接完整句子。", "由于持续练习，Nelson 正在取得进步。"],
     ["grammar:present-perfect", "现在完成时", "Modern technology _____ English learning more efficient.", ["made", "has made", "makes yesterday", "is making last week"], "has made", "强调过去发生并影响现在，使用现在完成时。", "现代科技已经让英语学习变得更加高效。"],
     ["grammar:passive-voice", "被动语态", "Recyclable waste can _____ to save resources.", ["utilize", "be utilized", "be utilizing", "utilized"], "be utilized", "情态动词后被动结构为 can be + 过去分词。", "可回收垃圾可以被利用来节约资源。"],
-    ["grammar:not-only", "not only...but also", "Reading widely can not only broaden vocabulary _____ enrich knowledge.", ["and", "but also", "or", "so"], "but also", "not only...but also... 是固定并列结构。", "广泛阅读不仅能扩大词汇量，还能丰富知识。"],
+    ["grammar:not-only", "not only...but also", "Reading widely can not only expand our vocabulary _____ enrich our knowledge.", ["and", "but also", "or", "so"], "but also", "not only...but also... 是固定并列结构。", "广泛阅读不仅能扩大词汇量，还能丰富知识。"],
   ].map((item, index) => ({
     id: `grammar-${index + 1}`,
     knowledgeId: item[0],
