@@ -37,8 +37,30 @@ assert.deepEqual(
   [1, 2, 3, 4, 5, 6, 7],
 );
 assert.equal(new Set(morningQuestions.map((question) => question.knowledgeId)).size, 20);
-assert.ok(morningQuestions.every((question) => question.sourceWeek === "WEEK_03"));
+assert.equal(
+  morningQuestions.filter((question) => question.scope === "recent" && question.sourceWeek === "WEEK_04").length,
+  13,
+);
+assert.equal(
+  morningQuestions.filter((question) => question.scope === "previous" && question.sourceWeek === "WEEK_03").length,
+  7,
+);
 assert.ok(morningQuestions.every((question) => question.translation));
+const expectedSurfaceAnswers = {
+  "WEEK_03-day2-context6": "dropped",
+  "WEEK_03-day2-context9": "measures",
+  "WEEK_03-day3-context1": "struggling",
+  "WEEK_03-day4-context5": "reacts",
+  "WEEK_03-day6-context2": "concerned",
+  "WEEK_04-day2-context6": "measures",
+  "WEEK_04-day2-context9": "utilized",
+  "WEEK_04-day3-context5": "resources",
+};
+Object.entries(expectedSurfaceAnswers).forEach(([id, answer]) => {
+  const item = morningBank.find((candidate) => candidate.id === id);
+  assert.equal(item?.answer, answer, `${id} must use the grammatically correct surface form`);
+  assert.ok(item?.accepted?.includes(answer), `${id} must accept its standard answer`);
+});
 
 const monthly = Engine.buildExam("monthly", bank, {}, "test-month");
 assert.equal(monthly.questions.length, 40);

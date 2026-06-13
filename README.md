@@ -55,6 +55,7 @@ python3 "../../Nelson晨读自动化/模板/fetch_assessment_review.py"
 
 ```bash
 node engine.test.js
+python3 content_quality_test.py
 ```
 
 ## 与晨读自动化联动
