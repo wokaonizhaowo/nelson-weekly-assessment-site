@@ -70,6 +70,10 @@ button { cursor: pointer; }
 .today-task-card > span[data-status="active"] { background: #f3e5c6; color: #8a601f; }
 .today-task-card > span[data-status="done"] { background: var(--green-soft); color: var(--green); }
 .today-task-card > p { grid-column: 1 / -1; margin: 5px 0 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
+.task-steps { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 7px; }
+.task-steps span { padding: 7px 5px; border-radius: 9px; background: rgba(112,119,113,.1); color: var(--muted); font-size: 11px; text-align: center; }
+.task-steps span.done { background: var(--green-soft); color: var(--green); font-weight: 800; }
+.task-steps span.active { background: var(--accent-soft); color: var(--accent-dark); font-weight: 800; }
 .exam-hero { padding: 24px 22px; border-radius: 28px 28px 28px 7px; background: var(--ink); color: var(--surface); box-shadow: 0 17px 35px rgba(32,43,40,.17); }
 .exam-hero > p { margin: 0 0 8px; color: rgba(255,255,255,.58); font-size: 10px; }
 .exam-hero h2 { margin: 0; font: 600 22px/1.35 var(--display); text-wrap: pretty; }
@@ -88,6 +92,12 @@ button { cursor: pointer; }
 .pending-correction-card strong { font-size: 15px; line-height: 1.4; }
 .pending-correction-card small { margin-top: 3px; color: var(--accent-dark); font-size: 13px; }
 .pending-correction-card > b { color: var(--accent-dark); font-size: 13px; white-space: nowrap; }
+.spaced-review-card { width: 100%; margin-top: 11px; padding: 15px 16px; display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; border: 1px solid var(--green); border-radius: 6px 18px 18px; background: var(--green-soft); text-align: left; }
+.spaced-review-card > span { padding: 5px 7px; border-radius: 99px; background: var(--green); color: white; font-size: 12px; font-weight: 800; white-space: nowrap; }
+.spaced-review-card strong, .spaced-review-card small { display: block; }
+.spaced-review-card strong { font-size: 15px; line-height: 1.4; }
+.spaced-review-card small { margin-top: 3px; color: var(--green); font-size: 13px; }
+.spaced-review-card > b { color: var(--green); font-size: 13px; white-space: nowrap; }
 .home-section, .dashboard-card { margin-top: 12px; padding: 16px; border-radius: 6px 20px 20px; background: #ece7dc; }
 .section-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
 .section-heading h3 { margin: 0; font: 650 16px/1.25 var(--display); }
@@ -298,6 +308,7 @@ button:disabled { opacity: .35; cursor: default; }
 .login-message { min-height: 22px; margin: 0 0 9px; color: var(--accent-dark); font-size: 13px; line-height: 1.5; }
 .login-card > .primary-button { width: 100%; }
 .logout-button { width: 100%; margin-top: 9px; border: 0; padding: 8px; background: transparent; color: var(--muted); text-decoration: underline; }
+.sync-notice { position: fixed; right: 16px; bottom: calc(84px + env(safe-area-inset-bottom)); left: 16px; z-index: 40; max-width: 398px; margin: auto; padding: 11px 14px; border-radius: 12px; background: var(--ink); color: white; box-shadow: 0 10px 30px rgba(32,43,40,.24); font-size: 13px; line-height: 1.5; text-align: center; }
 
 /* Unified mobile typography */
 .topbar p,

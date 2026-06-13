@@ -82,4 +82,22 @@ assert.ok(carryoverWeekly.questions.some((item) => item.knowledgeId === monthlyK
 const afterWeekly = Engine.updateProfiles(afterMonthly, Engine.scoreExam(carryoverWeekly, {}, 0, 600000));
 assert.equal(afterWeekly[monthlyKnowledge].remainingWeeklyReviews, 1);
 
+const firstWrongAt = Date.parse("2026-06-13T02:00:00Z");
+const delayedWrong = Engine.scoreExam(
+  weekly,
+  { ...answers, [question.id]: "wrong" },
+  firstWrongAt - 600000,
+  firstWrongAt,
+);
+const delayedProfile = Engine.updateProfiles({}, delayedWrong);
+assert.equal(delayedProfile[question.knowledgeId].masteryState, "learning");
+assert.ok(delayedProfile[question.knowledgeId].nextRetestAt);
+const spacedExam = Engine.buildSpacedReviewExam(
+  [...morningBank, ...bank],
+  delayedProfile,
+  firstWrongAt + 25 * 60 * 60 * 1000,
+);
+assert.ok(spacedExam.questions.some((item) => item.knowledgeId === question.knowledgeId));
+assert.ok(spacedExam.questions.every((item) => item.scope === "spaced-review"));
+
 console.log("All Nelson assessment engine tests passed.");

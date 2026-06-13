@@ -19,8 +19,10 @@ function currentWeekSalt(type = "weekly") {
 const defaultState = {
   profiles: {},
   results: [],
+  reviewResults: [],
   drafts: [],
   reviewTasks: {},
+  morningReviewQueue: [],
   currentAttempt: null,
   submittedExamIds: [],
 };
@@ -44,6 +46,8 @@ let correctionIndex = 0;
 let cloudUpdatedAt = null;
 let syncInProgress = false;
 let pendingCloudSave = false;
+let submitInProgress = false;
+let noticeTimer = null;
 
 const elements = Object.fromEntries(
   [...document.querySelectorAll("[id]")].map((element) => [element.id, element]),
@@ -80,6 +84,14 @@ function setSyncStatus(status, text) {
   if (!elements.syncStatus) return;
   elements.syncStatus.dataset.state = status;
   elements.syncStatus.textContent = text;
+}
+
+function showNotice(text, duration = 2800) {
+  if (!elements.syncNotice) return;
+  window.clearTimeout(noticeTimer);
+  elements.syncNotice.textContent = text;
+  elements.syncNotice.classList.remove("hidden");
+  noticeTimer = window.setTimeout(() => elements.syncNotice.classList.add("hidden"), duration);
 }
 
 function resultCorrectionCount(result) {
@@ -139,10 +151,15 @@ function mergeStates(localValue, remoteValue) {
       ? local.profiles
       : remote.profiles,
     results: mergeResults(local.results, remote.results),
+    reviewResults: mergeResults(local.reviewResults, remote.reviewResults),
     drafts: [...new Map(
       [...remote.drafts, ...local.drafts].map((item) => [item.knowledgeId, item]),
     ).values()],
     reviewTasks: mergeReviewTasks(local.reviewTasks, remote.reviewTasks),
+    morningReviewQueue: [...new Map(
+      [...remote.morningReviewQueue, ...local.morningReviewQueue]
+        .map((item) => [item.knowledgeId, item]),
+    ).values()],
     currentAttempt,
     submittedExamIds: [...new Set([...remote.submittedExamIds, ...local.submittedExamIds])],
   };
@@ -202,8 +219,10 @@ function normalizeState(value) {
     ...(value || {}),
     profiles: value?.profiles || {},
     results: Array.isArray(value?.results) ? value.results : [],
+    reviewResults: Array.isArray(value?.reviewResults) ? value.reviewResults : [],
     drafts: Array.isArray(value?.drafts) ? value.drafts : [],
     reviewTasks: value?.reviewTasks || {},
+    morningReviewQueue: Array.isArray(value?.morningReviewQueue) ? value.morningReviewQueue : [],
     submittedExamIds: Array.isArray(value?.submittedExamIds) ? value.submittedExamIds : [],
   };
 }
@@ -302,12 +321,16 @@ async function activateSession(session) {
     applyRoleAccess();
     showScreen(currentRole === "parent" ? "parentScreen" : "studentHome");
   } catch (error) {
-    showLogin(
-      currentRole,
-      error.code === "42P01"
-        ? "数据库尚未初始化，请家长先运行 supabase-setup.sql。"
-        : `云端连接失败：${error.message}`,
-    );
+    if (error.code === "42P01") {
+      showLogin(currentRole, "数据库尚未初始化，请家长先运行 supabase-setup.sql。");
+      return;
+    }
+    cloudReady = false;
+    setSyncStatus("offline", "离线保存");
+    elements.loginModal.classList.add("hidden");
+    applyRoleAccess();
+    showScreen(currentRole === "parent" ? "parentScreen" : "studentHome");
+    showNotice("暂时无法连接云端，已进入本机离线模式。联网后会自动同步。", 5000);
   }
 }
 
@@ -319,7 +342,13 @@ async function initializeCloud() {
   supabaseClient = window.supabase.createClient(
     supabaseConfig.url,
     supabaseConfig.publishableKey,
-    { auth: { persistSession: true, autoRefreshToken: true } },
+    {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: false,
+      },
+    },
   );
   const { data } = await supabaseClient.auth.getSession();
   if (data.session) {
@@ -404,7 +433,9 @@ function showScreen(id) {
   elements.roleButton.classList.toggle("hidden", id === "examScreen" || id === "reviewScreen");
   const titles = {
     studentHome: ["NELSON · WEEKLY CHECK", "周六英语测验"],
-    examScreen: [activeExam?.type === "monthly" ? "MONTHLY EXAM" : "WEEKLY TEST", "专注完成整套试卷"],
+    examScreen: activeExam?.spacedReview
+      ? ["SPACED REVIEW", "间隔复测"]
+      : [activeExam?.type === "monthly" ? "MONTHLY EXAM" : "WEEKLY TEST", "专注完成整套试卷"],
     reviewScreen: ["SCORE SAVED", "成绩与订正"],
     historyScreen: ["NELSON · SCOREBOOK", "成绩记录"],
     parentScreen: ["NELSON · PARENT", "家长看板"],
@@ -476,18 +507,25 @@ function renderHome() {
   const pendingForScheduled = completedResult?.results?.filter(
     (item) => !item.correct && !item.corrected,
   ).length || 0;
+  const scheduledTasks = completedResult ? state.reviewTasks[completedResult.id] || [] : [];
+  const testDone = Boolean(completedResult);
+  const correctionDone = testDone && pendingForScheduled === 0;
+  const reviewDone = correctionDone &&
+    (!scheduledTasks.length || scheduledTasks.every((task) => task.completed));
   const taskLabel = isMonthlyWeek
     ? `${nextSaturday.getMonth() + 1} 月月考`
     : `${morningReadingData?.latestLabel?.replace("WEEK ", "W") || "本周"} 周测`;
   elements.todayTaskTitle.textContent = `今天要完成：${taskLabel}`;
   elements.todayTaskStatus.textContent = completedResult
-    ? pendingForScheduled
+    ? !correctionDone
       ? "待订正"
-      : "已完成"
+      : !reviewDone
+        ? "待复习"
+        : "已完成"
     : state.currentAttempt?.examId === scheduledExam.id
       ? "进行中"
       : "待完成";
-  elements.todayTaskStatus.dataset.status = completedResult && !pendingForScheduled
+  elements.todayTaskStatus.dataset.status = reviewDone
     ? "done"
     : state.currentAttempt?.examId === scheduledExam.id
       ? "active"
@@ -495,12 +533,19 @@ function renderHome() {
         ? "correction"
         : "pending";
   elements.todayTaskCopy.textContent = completedResult
-    ? pendingForScheduled
-      ? `测试已经提交，还有 ${pendingForScheduled} 题需要订正。订正完成才算完成本周任务。`
-      : "本周任务已全部完成。可以查看成绩和复习任务。"
+    ? !correctionDone
+      ? `测试已经提交，还有 ${pendingForScheduled} 题需要订正。`
+      : !reviewDone
+        ? `订正已经完成，还有 ${scheduledTasks.filter((task) => !task.completed).length} 项复习任务。`
+        : "测试、订正和复习任务均已完成。"
     : isMonthlyWeek
       ? "预计 30 分钟，本周月考替代周测，完成测试和订正才算结束。"
       : "预计 15 分钟，完成测试和订正才算完成本周任务。";
+  const activeStep = !testDone ? 0 : !correctionDone ? 1 : !reviewDone ? 2 : -1;
+  elements.taskSteps.innerHTML = ["测试", "订正", "复习"].map((label, index) => {
+    const done = [testDone, correctionDone, reviewDone][index];
+    return `<span class="${done ? "done" : activeStep === index ? "active" : ""}">${done ? "✓ " : ""}${label}</span>`;
+  }).join("");
   elements.monthlyExamTitle.textContent = `${nextSaturday.getMonth() + 1} 月月考 · 40 题`;
   document.querySelector(".exam-hero").classList.toggle("hidden", isMonthlyWeek);
   elements.monthlyCard.classList.toggle("hidden", !isMonthlyWeek);
@@ -529,15 +574,72 @@ function renderHome() {
   } else {
     delete elements.pendingCorrectionCard.dataset.resultId;
   }
+  const spacedExam = Engine.buildSpacedReviewExam(bank, state.profiles);
+  const savedSpacedExam = state.currentAttempt?.assessmentMode === "spaced-review"
+    ? state.currentAttempt.examSnapshot
+    : null;
+  const availableSpacedExam = savedSpacedExam || spacedExam;
+  elements.spacedReviewCard.classList.toggle("hidden", !availableSpacedExam?.questions?.length);
+  if (availableSpacedExam?.questions?.length) {
+    elements.spacedReviewTitle.textContent = savedSpacedExam
+      ? "上次间隔复测还没有完成"
+      : `${availableSpacedExam.questions.length} 个知识点到了复测时间`;
+    elements.spacedReviewCopy.textContent = savedSpacedExam
+      ? "继续完成，答案已经保留。"
+      : "使用新句子独立作答，连续两次通过后才算稳定掌握。";
+  }
 }
 
 function startExam(type) {
   startExamWithOptions(type);
 }
 
+function startSpacedReview() {
+  if (state.currentAttempt && state.currentAttempt.assessmentMode !== "spaced-review") {
+    showNotice("当前正式测试还没有完成，请先继续完成或交卷。");
+    return;
+  }
+  const saved = state.currentAttempt?.assessmentMode === "spaced-review"
+    ? state.currentAttempt
+    : null;
+  activeExam = saved?.examSnapshot || Engine.buildSpacedReviewExam(bank, state.profiles);
+  if (!activeExam?.questions?.length) {
+    showNotice("目前没有到期的间隔复测。");
+    return;
+  }
+  activeExam.practiceMode = false;
+  activeExam.spacedReview = true;
+  activeIndex = saved?.activeIndex || 0;
+  answers = saved?.answers || {};
+  elapsedSeconds = saved?.elapsedSeconds || 0;
+  activeSince = Date.now();
+  state.currentAttempt = {
+    examId: activeExam.id,
+    activeIndex,
+    answers,
+    elapsedSeconds,
+    practiceMode: false,
+    assessmentMode: "spaced-review",
+    examSnapshot: activeExam,
+  };
+  saveState();
+  showScreen("examScreen");
+  renderQuestion();
+  startTimer();
+}
+
 function startExamWithOptions(type, options = {}) {
   activeExam = Engine.buildExam(type, bank, state.profiles, currentWeekSalt(type));
   activeExam.practiceMode = Boolean(options.practice);
+  if (
+    state.currentAttempt &&
+    state.currentAttempt.examId !== activeExam.id &&
+    state.currentAttempt.assessmentMode === "spaced-review"
+  ) {
+    activeExam = null;
+    showNotice("还有一组间隔复测未完成，请先完成复测再开始正式测试。");
+    return;
+  }
   const officialResult = findOfficialResult(activeExam.id);
   if (officialResult && !activeExam.practiceMode) {
     latestResult = officialResult;
@@ -560,6 +662,8 @@ function startExamWithOptions(type, options = {}) {
     answers,
     elapsedSeconds,
     practiceMode: activeExam.practiceMode,
+    assessmentMode: activeExam.spacedReview ? "spaced-review" : "exam",
+    examSnapshot: activeExam.spacedReview ? activeExam : null,
   };
   saveState();
   showScreen("examScreen");
@@ -610,6 +714,8 @@ function persistCurrentAnswer() {
     answers,
     elapsedSeconds: currentElapsedSeconds(),
     practiceMode: activeExam.practiceMode,
+    assessmentMode: activeExam.spacedReview ? "spaced-review" : "exam",
+    examSnapshot: activeExam.spacedReview ? activeExam : null,
   };
   saveState();
 }
@@ -641,6 +747,7 @@ function scopeLabel(scope) {
     mistake: "历史错题",
     "monthly-vocabulary": "本月重点词",
     "monthly-grammar": "本月重点语法",
+    "spaced-review": "间隔复测",
   }[scope] || "综合复习";
 }
 
@@ -648,7 +755,9 @@ function renderQuestion() {
   const question = activeExam.questions[activeIndex];
   const total = activeExam.questions.length;
   elements.examTypeLabel.textContent =
-    activeExam.type === "monthly"
+    activeExam.spacedReview
+      ? "间隔复测"
+      : activeExam.type === "monthly"
       ? "月考 · 40题"
       : `${morningReadingData?.latestLabel || legacyData.label} · 25题`;
   elements.questionCounter.textContent = `${activeIndex + 1} / ${total}`;
@@ -751,11 +860,50 @@ function openSubmitModal() {
     });
   });
   elements.confirmSubmitButton.disabled = unanswered > 0;
+  elements.confirmSubmitButton.textContent = activeExam.spacedReview ? "提交复测" : "正式交卷";
   elements.submitModal.classList.remove("hidden");
 }
 
-function submitExam() {
-  if (!activeExam.practiceMode && state.submittedExamIds.includes(activeExam.id)) return;
+function updateMorningReviewQueue(result) {
+  const queued = new Map(state.morningReviewQueue.map((item) => [item.knowledgeId, item]));
+  result.results.filter((item) => !item.correct).forEach((item) => {
+    const existing = queued.get(item.question.knowledgeId);
+    queued.set(item.question.knowledgeId, {
+      ...existing,
+      knowledgeId: item.question.knowledgeId,
+      label: item.question.knowledge,
+      category: item.question.category,
+      errorType: item.question.errorType,
+      typicalWrongAnswer: item.userAnswer || "未作答",
+      sourcePrompt: item.question.prompt,
+      suggestedPrompt: item.question.variantPrompt || item.question.prompt,
+      lastErrorAt: result.submittedAt,
+      errorCount: (existing?.errorCount || 0) + 1,
+      suggestedPractice: item.question.category === "spelling"
+        ? "看中文拼写＋句中补全"
+        : item.question.category === "collocation"
+          ? "固定搭配换句填空"
+          : "规则对比＋变式练习",
+    });
+  });
+  state.morningReviewQueue = [...queued.values()]
+    .filter((item) => state.profiles[item.knowledgeId]?.masteryState !== "mastered")
+    .sort((left, right) =>
+      Engine.calculatePriority(state.profiles[right.knowledgeId]) -
+      Engine.calculatePriority(state.profiles[left.knowledgeId])
+    )
+    .slice(0, 12);
+}
+
+async function submitExam() {
+  if (submitInProgress) return;
+  if (!activeExam.practiceMode && !activeExam.spacedReview && state.submittedExamIds.includes(activeExam.id)) {
+    showNotice("这份正式试卷已经提交，不能重复交卷。");
+    return;
+  }
+  submitInProgress = true;
+  elements.confirmSubmitButton.disabled = true;
+  elements.confirmSubmitButton.textContent = "正在保存…";
   pauseExamTimer();
   const submittedAt = Date.now();
   latestResult = Engine.scoreExam(
@@ -766,10 +914,16 @@ function submitExam() {
   );
   latestResult.weekLabel = morningReadingData?.latestLabel || legacyData.label;
   latestResult.practice = activeExam.practiceMode;
-  if (!activeExam.practiceMode) {
+  latestResult.spacedReview = Boolean(activeExam.spacedReview);
+  if (activeExam.spacedReview) {
+    state.profiles = Engine.updateProfiles(state.profiles, latestResult);
+    state.reviewResults.push(latestResult);
+    updateMorningReviewQueue(latestResult);
+  } else if (!activeExam.practiceMode) {
     state.results.push(latestResult);
     state.profiles = Engine.updateProfiles(state.profiles, latestResult);
     state.submittedExamIds.push(activeExam.id);
+    updateMorningReviewQueue(latestResult);
   }
   state.currentAttempt = null;
   saveState();
@@ -777,14 +931,30 @@ function submitExam() {
   elements.submitModal.classList.add("hidden");
   renderResult(latestResult);
   showScreen("reviewScreen");
+  if (!navigator.onLine) {
+    showNotice("成绩已保存在本机，网络恢复后会自动同步到云端。", 5000);
+  } else {
+    await syncStateToCloud();
+    showNotice(
+      pendingCloudSave ? "成绩已保存在本机，正在等待云端同步。" : "成绩已安全同步到云端。",
+      3600,
+    );
+  }
+  submitInProgress = false;
 }
 
 function renderResult(result) {
   const incorrect = result.results.filter((item) => !item.correct);
-  elements.resultTypeLabel.textContent = result.examType === "monthly" ? "MONTHLY RESULT" : "WEEKLY RESULT";
+  elements.resultTypeLabel.textContent = result.spacedReview
+    ? "SPACED REVIEW"
+    : result.examType === "monthly"
+      ? "MONTHLY RESULT"
+      : "WEEKLY RESULT";
   elements.resultScore.textContent = result.score;
   elements.resultHeadline.textContent = result.practice
     ? "本次为不计分练习"
+    : result.spacedReview
+      ? "间隔复测结果已记录"
     : result.score >= 85
       ? "掌握得很扎实"
       : result.score >= 70
@@ -799,7 +969,7 @@ function renderResult(result) {
   elements.incorrectCount.textContent = `${incorrect.length} 处需要订正`;
   correctionIndex = Math.max(0, incorrect.findIndex((item) => !item.corrected));
   renderCorrectionStep(result);
-  elements.practiceRedoButton.classList.toggle("hidden", !activeExam);
+  elements.practiceRedoButton.classList.toggle("hidden", !activeExam || result.spacedReview);
   updateCorrectionCompletion();
 }
 
@@ -1111,6 +1281,7 @@ function renderDraft() {
 
 elements.startWeeklyButton.addEventListener("click", () => startExam("weekly"));
 elements.startMonthlyButton.addEventListener("click", () => startExam("monthly"));
+elements.spacedReviewCard.addEventListener("click", startSpacedReview);
 elements.previousQuestionButton.addEventListener("click", () => goQuestion(-1));
 elements.nextQuestionButton.addEventListener("click", () => goQuestion(1));
 elements.cancelSubmitButton.addEventListener("click", () => elements.submitModal.classList.add("hidden"));
@@ -1207,6 +1378,17 @@ window.addEventListener("pagehide", () => {
 window.addEventListener("beforeunload", () => {
   persistCurrentAnswer();
   pauseExamTimer();
+});
+window.addEventListener("offline", () => {
+  setSyncStatus("offline", "离线保存");
+  showNotice("网络已断开，当前答案会先保存在本机。", 4000);
+});
+window.addEventListener("online", () => {
+  cloudReady = Boolean(currentUser && supabaseClient);
+  setSyncStatus("syncing", "正在同步");
+  showNotice("网络已恢复，正在同步本机进度。");
+  scheduleCloudSave();
+  refreshStateFromCloud();
 });
 
 initializeCloud();

@@ -42,6 +42,15 @@ python3 -m http.server 4173
 
 同步内容包括成绩、逐题答案、错题订正、掌握档案、家长优先级调整和下周试卷草稿。本地存储仍保留缓存，答题中断时先保存在设备上，恢复页面后再同步。
 
+错题还会进入 `morningReviewQueue`。晨读自动化可在生成新一周材料前运行：
+
+```bash
+export NELSON_STUDENT_PASSWORD='Nelson 的当前密码'
+python3 "../../Nelson晨读自动化/模板/fetch_assessment_review.py"
+```
+
+脚本会生成 `Nelson晨读自动化/输出/下周晨读复习重点.json`。密码只从环境变量读取，不写入代码或输出文件。
+
 运行引擎测试：
 
 ```bash

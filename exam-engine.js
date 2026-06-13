@@ -161,6 +161,40 @@
     };
   }
 
+  function buildSpacedReviewExam(bank, profiles, now = Date.now(), limit = 5) {
+    const dueProfiles = Object.values(profiles || {})
+      .filter((profile) =>
+        profile.nextRetestAt &&
+        new Date(profile.nextRetestAt).getTime() <= now &&
+        profile.masteryState !== "mastered"
+      )
+      .sort((left, right) => calculatePriority(right, now) - calculatePriority(left, now))
+      .slice(0, limit);
+    const questions = dueProfiles.map((profile, index) => {
+      const candidates = bank.filter((question) => question.knowledgeId === profile.knowledgeId);
+      const source = candidates.find((question) => question.id !== profile.lastQuestionId) || candidates[0];
+      if (!source) return null;
+      return {
+        ...source,
+        id: `retest-${profile.knowledgeId}-${now}-${index}`,
+        prompt: source.variantPrompt || source.prompt,
+        scope: "spaced-review",
+        order: index + 1,
+      };
+    }).filter(Boolean);
+    const points = questions.length ? 100 / questions.length : 0;
+    return {
+      id: `spaced-review-${now}`,
+      type: "review",
+      version: 1,
+      status: "published",
+      points,
+      totalPoints: 100,
+      durationMinutes: 5,
+      questions: questions.map((question) => ({ ...question, points })),
+    };
+  }
+
   function isCorrect(answer, question) {
     return (question.accepted || [question.answer]).some(
       (accepted) => normalizeAnswer(accepted) === normalizeAnswer(answer),
@@ -217,18 +251,43 @@
         importance: question.importance || 3,
         manualAdjustment: 0,
         typicalWrongAnswer: "",
+        independentCorrectStreak: 0,
+        masteryState: "learning",
       };
       profile.attempts += 1;
       profile.lastTestedAt = result.submittedAt;
+      profile.lastQuestionId = question.id;
       if (correct) {
         profile.consecutiveCorrect += 1;
         profile.recentErrorStreak = 0;
+        if (profile.errors > 0) {
+          const previousIndependentAt = profile.lastIndependentCorrectAt
+            ? new Date(profile.lastIndependentCorrectAt).getTime()
+            : 0;
+          const currentIndependentAt = new Date(result.submittedAt).getTime();
+          if (!previousIndependentAt || currentIndependentAt - previousIndependentAt >= 20 * 60 * 60 * 1000) {
+            profile.independentCorrectStreak = (profile.independentCorrectStreak || 0) + 1;
+            profile.lastIndependentCorrectAt = result.submittedAt;
+          }
+          profile.masteryState = profile.independentCorrectStreak >= 2 ? "mastered" : "improving";
+          profile.nextRetestAt = profile.masteryState === "mastered"
+            ? null
+            : new Date(currentIndependentAt + 24 * 60 * 60 * 1000).toISOString();
+        } else {
+          profile.masteryState = "observed-correct";
+          profile.nextRetestAt = null;
+        }
       } else {
         profile.errors += 1;
         profile.recentErrorStreak += 1;
         profile.consecutiveCorrect = 0;
         profile.lastErrorAt = result.submittedAt;
         profile.typicalWrongAnswer = userAnswer || "未作答";
+        profile.independentCorrectStreak = 0;
+        profile.masteryState = "learning";
+        profile.nextRetestAt = new Date(
+          new Date(result.submittedAt).getTime() + 24 * 60 * 60 * 1000,
+        ).toISOString();
         if (result.examType === "monthly") {
           profile.monthlyErrors += 1;
           profile.remainingWeeklyReviews = 2;
@@ -276,7 +335,7 @@
     const priority = calculatePriority(profile);
     const level = profile.attempts === 1 ? "observe" : priority >= 58 ? "high" : priority >= 32 ? "medium" : "observe";
     const status =
-      profile.consecutiveCorrect >= 2
+      profile.masteryState === "mastered" || profile.consecutiveCorrect >= 2
         ? "stable"
         : profile.consecutiveCorrect === 1
           ? "improving"
@@ -309,6 +368,7 @@
     normalizeAnswer,
     examTypeForDate,
     buildExam,
+    buildSpacedReviewExam,
     scoreExam,
     updateProfiles,
     calculatePriority,

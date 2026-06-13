@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#f5f1e8" />
     <title>Nelson 英语周测</title>
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=20260613b" />
   </head>
   <body>
     <main class="app-shell">
@@ -34,6 +34,7 @@
           </div>
           <span id="todayTaskStatus">待完成</span>
           <p id="todayTaskCopy">预计 15 分钟，完成测试和订正才算完成本周任务。</p>
+          <div id="taskSteps" class="task-steps"></div>
         </article>
 
         <article class="exam-hero">
@@ -58,6 +59,12 @@
           <span>订正未完成</span>
           <div><strong id="pendingCorrectionTitle">上次还有错题需要订正</strong><small id="pendingCorrectionCount"></small></div>
           <b>继续订正 →</b>
+        </button>
+
+        <button id="spacedReviewCard" class="spaced-review-card hidden">
+          <span>间隔复测</span>
+          <div><strong id="spacedReviewTitle">有知识点到了复测时间</strong><small id="spacedReviewCopy"></small></div>
+          <b>开始 →</b>
         </button>
 
         <section id="studentFocusSection" class="home-section hidden">
@@ -196,7 +203,7 @@
       <form id="loginForm" class="modal-card login-card">
         <p>NELSON · PRIVATE ACCESS</p>
         <h2>登录英语成长空间</h2>
-        <span>选择身份并输入密码。成绩会安全同步到云端。</span>
+        <span>首次选择身份并输入密码后，本设备会保持登录；只有主动退出时才需要重新输入。</span>
         <div id="loginRoleSwitch" class="login-role-switch">
           <button type="button" class="active" data-login-role="student">Nelson</button>
           <button type="button" data-login-role="parent">家长</button>
@@ -224,11 +231,13 @@
       </div>
     </div>
 
+    <div id="syncNotice" class="sync-notice hidden" role="status"></div>
+
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="./supabase-config.js"></script>
     <script src="./morning-reading-data.js"></script>
     <script src="./week-data.js"></script>
-    <script src="./exam-engine.js"></script>
-    <script src="./app.js"></script>
+    <script src="./exam-engine.js?v=20260613b"></script>
+    <script src="./app.js?v=20260613b"></script>
   </body>
 </html>
