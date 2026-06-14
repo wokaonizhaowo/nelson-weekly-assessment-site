@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#f5f1e8" />
     <title>Nelson 英语周测</title>
-    <link rel="stylesheet" href="./styles.css?v=20260613d" />
+    <link rel="stylesheet" href="./styles.css?v=20260614a" />
   </head>
   <body>
     <main class="app-shell">
@@ -145,6 +145,58 @@
         <div id="historyList" class="history-list"></div>
       </section>
 
+      <section id="vocabularyScreen" class="screen">
+        <div class="vocab-intro">
+          <p>WORD QUEST</p>
+          <h2>今天的单词地图</h2>
+          <span>约 8 分钟，用拼写和语境把单词真正留下来。</span>
+        </div>
+        <article class="vocab-map-card">
+          <div class="vocab-map-head">
+            <div><span>今日关卡</span><strong id="vocabDailyCount">0 个词</strong></div>
+            <div><span>累计星星</span><strong id="vocabTotalStars">0</strong></div>
+          </div>
+          <div id="vocabMap" class="vocab-map"></div>
+          <button id="startVocabularyButton" class="primary-button">开始今日闯关</button>
+        </article>
+        <section class="vocab-stats">
+          <article><span>正在学习</span><strong id="vocabLearningCount">0</strong></article>
+          <article><span>已经掌握</span><strong id="vocabMasteredCount">0</strong></article>
+          <article><span>连续学习</span><strong id="vocabStreakCount">0 天</strong></article>
+        </section>
+        <section class="home-section">
+          <div class="section-heading">
+            <div><p>HOW IT WORKS</p><h3>怎样才算真正掌握</h3></div>
+          </div>
+          <p class="vocab-rule-copy">认出词义只是热身。拼写和语境运用必须在不同日期各答对两次，才会点亮“已掌握”。</p>
+        </section>
+      </section>
+
+      <section id="vocabularyGameScreen" class="screen">
+        <div class="vocab-game-progress">
+          <div><span id="vocabStageLabel">认识单词</span><strong id="vocabStepCounter">1 / 40</strong></div>
+          <div class="progress-track"><i id="vocabProgressBar"></i></div>
+          <small id="vocabXpLabel">0 XP</small>
+        </div>
+        <article id="vocabChallengeCard" class="vocab-challenge-card"></article>
+        <div class="vocab-game-actions">
+          <button id="vocabHintButton" class="secondary-button">给我一点提示</button>
+          <button id="vocabContinueButton" class="primary-button">继续</button>
+        </div>
+        <p id="vocabFeedback" class="vocab-feedback" role="status"></p>
+      </section>
+
+      <section id="vocabularyResultScreen" class="screen">
+        <div class="vocab-result-hero">
+          <p>QUEST COMPLETE</p>
+          <strong id="vocabResultStars">0</strong>
+          <h2>今日闯关完成</h2>
+          <span id="vocabResultSummary"></span>
+        </div>
+        <div id="vocabResultWords" class="vocab-result-words"></div>
+        <button id="finishVocabularyButton" class="primary-button full-button">返回单词地图</button>
+      </section>
+
       <section id="parentScreen" class="screen">
         <div class="parent-intro">
           <p>PARENT DASHBOARD</p>
@@ -189,13 +241,30 @@
           <div id="draftList" class="draft-list"></div>
         </section>
 
+        <section class="dashboard-card vocabulary-library-card">
+          <div class="section-heading">
+            <div><p>WORD LIBRARY</p><h3>给 Nelson 增加单词</h3></div>
+            <span id="vocabularyLibraryCount">0 个</span>
+          </div>
+          <p>只需粘贴英文单词，其余释义、例句、题目和审校由系统完成。</p>
+          <label class="word-import-field">
+            <span>支持换行、空格或逗号分隔</span>
+            <textarea id="manualWordInput" rows="4" placeholder="例如：&#10;resilient&#10;perspective&#10;accomplish"></textarea>
+          </label>
+          <button id="generateWordsButton" class="primary-button full-button">自动生成学习卡</button>
+          <p id="wordGenerationStatus" class="word-generation-status"></p>
+          <div id="generatedWordPreview" class="generated-word-preview"></div>
+          <div id="vocabularyLibraryList" class="vocabulary-library-list"></div>
+        </section>
+
         <button id="resetButton" class="reset-button">清除本机测试数据</button>
       </section>
 
       <nav id="studentNav" class="bottom-nav">
         <button class="active" data-screen="studentHome"><span>01</span>测验</button>
-        <button data-screen="historyScreen"><span>02</span>成绩</button>
-        <button id="parentNavButton" data-screen="parentScreen"><span>03</span>家长</button>
+        <button data-screen="vocabularyScreen"><span>02</span>背词</button>
+        <button data-screen="historyScreen"><span>03</span>成绩</button>
+        <button id="parentNavButton" data-screen="parentScreen"><span>04</span>家长</button>
       </nav>
     </main>
 
@@ -238,6 +307,7 @@
     <script src="./morning-reading-data.js?v=20260613c"></script>
     <script src="./week-data.js?v=20260613c"></script>
     <script src="./exam-engine.js?v=20260613b"></script>
-    <script src="./app.js?v=20260613d"></script>
+    <script src="./vocabulary-engine.js?v=20260614a"></script>
+    <script src="./app.js?v=20260614a"></script>
   </body>
 </html>
