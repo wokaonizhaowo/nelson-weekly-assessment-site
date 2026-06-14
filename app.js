@@ -1,5 +1,6 @@
 const STORAGE_KEY = "nelson-weekly-assessment-v2";
 const Engine = window.NelsonExamEngine;
+const VocabularyEngine = window.NelsonVocabularyEngine;
 const supabaseConfig = window.NELSON_SUPABASE_CONFIG;
 const legacyData = window.NELSON_WEEK_DATA;
 const morningReadingData = window.NELSON_MORNING_READING_DATA;
@@ -23,6 +24,12 @@ const defaultState = {
   drafts: [],
   reviewTasks: {},
   morningReviewQueue: [],
+  vocabularyItems: [],
+  vocabularyProgress: {},
+  vocabularySessions: [],
+  generatedWordDrafts: [],
+  pendingVocabularyWords: [],
+  currentVocabularySession: null,
   currentAttempt: null,
   submittedExamIds: [],
 };
@@ -48,6 +55,11 @@ let syncInProgress = false;
 let pendingCloudSave = false;
 let submitInProgress = false;
 let noticeTimer = null;
+let activeVocabularySession = null;
+let vocabularyStartedAt = 0;
+let vocabularyTimerId = null;
+let vocabularyHintLevel = 0;
+let vocabularyAnswerChecked = false;
 
 const elements = Object.fromEntries(
   [...document.querySelectorAll("[id]")].map((element) => [element.id, element]),
@@ -126,6 +138,49 @@ function mergeReviewTasks(localTasks = {}, remoteTasks = {}) {
   return merged;
 }
 
+function mergeById(localItems = [], remoteItems = []) {
+  const merged = new Map(remoteItems.map((item) => [item.id, item]));
+  localItems.forEach((item) => {
+    const remote = merged.get(item.id);
+    const localTime = new Date(item.updatedAt || item.createdAt || 0).getTime();
+    const remoteTime = new Date(remote?.updatedAt || remote?.createdAt || 0).getTime();
+    if (!remote || localTime >= remoteTime) merged.set(item.id, item);
+  });
+  return [...merged.values()];
+}
+
+function mergeVocabularyProgress(localProgress = {}, remoteProgress = {}) {
+  const merged = clone(remoteProgress);
+  Object.entries(localProgress).forEach(([wordId, local]) => {
+    const remote = merged[wordId];
+    if (!remote) {
+      merged[wordId] = local;
+      return;
+    }
+    const localTime = new Date(local.lastStudiedAt || 0).getTime();
+    const remoteTime = new Date(remote.lastStudiedAt || 0).getTime();
+    const newest = localTime >= remoteTime ? local : remote;
+    merged[wordId] = {
+      ...newest,
+      spellingSuccessDates: [...new Set([
+        ...(local.spellingSuccessDates || []),
+        ...(remote.spellingSuccessDates || []),
+      ])],
+      usageSuccessDates: [...new Set([
+        ...(local.usageSuccessDates || []),
+        ...(remote.usageSuccessDates || []),
+      ])],
+      attempts: Math.max(local.attempts || 0, remote.attempts || 0),
+      errors: Math.max(local.errors || 0, remote.errors || 0),
+      spellingAttempts: Math.max(local.spellingAttempts || 0, remote.spellingAttempts || 0),
+      spellingErrors: Math.max(local.spellingErrors || 0, remote.spellingErrors || 0),
+      usageAttempts: Math.max(local.usageAttempts || 0, remote.usageAttempts || 0),
+      usageErrors: Math.max(local.usageErrors || 0, remote.usageErrors || 0),
+    };
+  });
+  return merged;
+}
+
 function attemptProgress(attempt) {
   if (!attempt) return -1;
   const answered = Object.values(attempt.answers || {}).filter((value) => String(value).trim()).length;
@@ -160,6 +215,22 @@ function mergeStates(localValue, remoteValue) {
       [...remote.morningReviewQueue, ...local.morningReviewQueue]
         .map((item) => [item.knowledgeId, item]),
     ).values()],
+    vocabularyItems: mergeById(local.vocabularyItems, remote.vocabularyItems),
+    vocabularyProgress: mergeVocabularyProgress(
+      local.vocabularyProgress,
+      remote.vocabularyProgress,
+    ),
+    vocabularySessions: mergeById(local.vocabularySessions, remote.vocabularySessions),
+    generatedWordDrafts: mergeById(local.generatedWordDrafts, remote.generatedWordDrafts),
+    pendingVocabularyWords: [...new Set([
+      ...remote.pendingVocabularyWords,
+      ...local.pendingVocabularyWords,
+    ])],
+    currentVocabularySession:
+      new Date(local.currentVocabularySession?.updatedAt || 0) >=
+      new Date(remote.currentVocabularySession?.updatedAt || 0)
+        ? local.currentVocabularySession
+        : remote.currentVocabularySession,
     currentAttempt,
     submittedExamIds: [...new Set([...remote.submittedExamIds, ...local.submittedExamIds])],
   };
@@ -195,7 +266,7 @@ async function syncStateToCloud(force = false) {
       pendingCloudSave = true;
       setSyncStatus("conflict", "已合并新数据");
       const activeScreen = document.querySelector(".screen.active")?.id;
-      if (["studentHome", "historyScreen", "parentScreen"].includes(activeScreen)) {
+      if (["studentHome", "vocabularyScreen", "historyScreen", "parentScreen"].includes(activeScreen)) {
         showScreen(activeScreen);
       }
       window.setTimeout(scheduleCloudSave, 300);
@@ -223,6 +294,14 @@ function normalizeState(value) {
     drafts: Array.isArray(value?.drafts) ? value.drafts : [],
     reviewTasks: value?.reviewTasks || {},
     morningReviewQueue: Array.isArray(value?.morningReviewQueue) ? value.morningReviewQueue : [],
+    vocabularyItems: Array.isArray(value?.vocabularyItems) ? value.vocabularyItems : [],
+    vocabularyProgress: value?.vocabularyProgress || {},
+    vocabularySessions: Array.isArray(value?.vocabularySessions) ? value.vocabularySessions : [],
+    generatedWordDrafts: Array.isArray(value?.generatedWordDrafts) ? value.generatedWordDrafts : [],
+    pendingVocabularyWords: Array.isArray(value?.pendingVocabularyWords)
+      ? value.pendingVocabularyWords
+      : [],
+    currentVocabularySession: value?.currentVocabularySession || null,
     submittedExamIds: Array.isArray(value?.submittedExamIds) ? value.submittedExamIds : [],
   };
 }
@@ -260,7 +339,7 @@ async function loadStateFromCloud() {
 }
 
 async function refreshStateFromCloud() {
-  if (!cloudReady || !currentUser || activeExam || !supabaseClient || pendingCloudSave) return;
+  if (!cloudReady || !currentUser || activeExam || activeVocabularySession || !supabaseClient || pendingCloudSave) return;
   try {
     await loadStateFromCloud();
     const activeScreen = document.querySelector(".screen.active")?.id;
@@ -427,22 +506,29 @@ function showScreen(id) {
     return;
   }
   screens.forEach((screen) => screen.classList.toggle("active", screen.id === id));
-  const rootScreen = ["studentHome", "historyScreen", "parentScreen"].includes(id);
+  const rootScreen = ["studentHome", "vocabularyScreen", "historyScreen", "parentScreen"].includes(id);
   elements.studentNav.classList.toggle("hidden", !rootScreen);
   elements.backButton.classList.toggle("hidden", rootScreen);
-  elements.roleButton.classList.toggle("hidden", id === "examScreen" || id === "reviewScreen");
+  elements.roleButton.classList.toggle(
+    "hidden",
+    ["examScreen", "reviewScreen", "vocabularyGameScreen", "vocabularyResultScreen"].includes(id),
+  );
   const titles = {
     studentHome: ["NELSON · WEEKLY CHECK", "周六英语测验"],
     examScreen: activeExam?.spacedReview
       ? ["SPACED REVIEW", "间隔复测"]
       : [activeExam?.type === "monthly" ? "MONTHLY EXAM" : "WEEKLY TEST", "专注完成整套试卷"],
     reviewScreen: ["SCORE SAVED", "成绩与订正"],
+    vocabularyScreen: ["NELSON · WORD QUEST", "单词地图"],
+    vocabularyGameScreen: ["WORD QUEST", "今日闯关"],
+    vocabularyResultScreen: ["QUEST COMPLETE", "闯关结果"],
     historyScreen: ["NELSON · SCOREBOOK", "成绩记录"],
     parentScreen: ["NELSON · PARENT", "家长看板"],
   };
   [elements.eyebrow.textContent, elements.pageTitle.textContent] = titles[id] || titles.studentHome;
   document.querySelectorAll("[data-screen]").forEach((button) => button.classList.toggle("active", button.dataset.screen === id));
   if (id === "studentHome") renderHome();
+  if (id === "vocabularyScreen") renderVocabularyHome();
   if (id === "historyScreen") renderHistory();
   if (id === "parentScreen") renderParent();
   document.querySelector(".screen.active")?.scrollTo(0, 0);
@@ -581,6 +667,604 @@ function renderHome() {
       ? "继续完成，答案已经保留。"
       : "使用新句子独立作答，连续两次通过后才算稳定掌握。";
   }
+}
+
+function allVocabularyItems() {
+  const morningItems = VocabularyEngine.buildMorningItems(morningQuestions);
+  const items = new Map(morningItems.map((item) => [item.id, item]));
+  state.vocabularyItems
+    .filter((item) => item.status === "active")
+    .forEach((item) => {
+      const duplicate = [...items.values()].find(
+        (existing) => VocabularyEngine.normalizeWord(existing.word) ===
+          VocabularyEngine.normalizeWord(item.word),
+      );
+      if (duplicate) {
+        items.set(duplicate.id, {
+          ...duplicate,
+          parentAdded: true,
+          parentNotes: item.parentNotes || "",
+        });
+      } else {
+        items.set(item.id, item);
+      }
+    });
+  return [...items.values()];
+}
+
+function completedVocabularySessions() {
+  return state.vocabularySessions
+    .filter((session) => session.completed)
+    .sort((left, right) => new Date(left.completedAt) - new Date(right.completedAt));
+}
+
+function vocabularyStreak() {
+  const dates = [...new Set(completedVocabularySessions().map((session) => session.dateKey))]
+    .sort()
+    .reverse();
+  if (!dates.length) return 0;
+  let streak = 1;
+  let cursor = new Date(`${dates[0]}T12:00:00`);
+  for (let index = 1; index < dates.length; index += 1) {
+    const expected = new Date(cursor);
+    expected.setDate(cursor.getDate() - 1);
+    if (VocabularyEngine.localDateKey(expected) !== dates[index]) break;
+    streak += 1;
+    cursor = expected;
+  }
+  return streak;
+}
+
+function vocabularyStats() {
+  const progress = Object.values(state.vocabularyProgress);
+  const sessions = completedVocabularySessions();
+  return {
+    mastered: progress.filter((item) => item.stage === "mastered").length,
+    learning: progress.filter((item) => item.stage !== "mastered").length,
+    stars: sessions.reduce((sum, item) => sum + (item.stars || 0), 0),
+    xp: sessions.reduce((sum, item) => sum + (item.xp || 0), 0),
+    streak: vocabularyStreak(),
+  };
+}
+
+function dailyVocabularyItems() {
+  return VocabularyEngine.selectDailyItems(
+    allVocabularyItems(),
+    state.vocabularyProgress,
+    morningReadingData,
+    Date.now(),
+    10,
+  );
+}
+
+function renderVocabularyHome() {
+  const items = dailyVocabularyItems();
+  const stats = vocabularyStats();
+  elements.vocabDailyCount.textContent = `${items.length} 个词`;
+  elements.vocabTotalStars.textContent = stats.stars;
+  elements.vocabLearningCount.textContent = stats.learning;
+  elements.vocabMasteredCount.textContent = stats.mastered;
+  elements.vocabStreakCount.textContent = `${stats.streak} 天`;
+  const saved = state.currentVocabularySession;
+  elements.startVocabularyButton.textContent = saved && !saved.completed
+    ? "继续今日闯关"
+    : items.length
+      ? "开始今日闯关"
+      : "今天的单词已完成";
+  elements.startVocabularyButton.disabled = !items.length && !saved;
+  elements.vocabMap.innerHTML = items.length
+    ? items.map((item, index) => {
+        const progress = state.vocabularyProgress[item.id];
+        const stateLabel = progress?.stage === "mastered"
+          ? "已掌握"
+          : progress?.stage === "relearning"
+            ? "再挑战"
+            : progress
+              ? "复习"
+              : "新词";
+        return `
+          <article class="${progress?.stage || "new"}">
+            <span>${index + 1}</span>
+            <div><strong>${escapeHtml(item.word)}</strong><small>${escapeHtml(item.meaningZh)}</small></div>
+            <b>${stateLabel}</b>
+          </article>`;
+      }).join("")
+    : `<p class="empty-copy">今天没有到期的新词或复习词。明天会按记忆节奏继续开放。</p>`;
+}
+
+function startVocabularySession() {
+  const saved = state.currentVocabularySession;
+  activeVocabularySession = saved && !saved.completed
+    ? clone(saved)
+    : VocabularyEngine.buildSession(
+        allVocabularyItems(),
+        state.vocabularyProgress,
+        morningReadingData,
+        Date.now(),
+        10,
+      );
+  if (!activeVocabularySession.steps.length) {
+    activeVocabularySession = null;
+    showNotice("今天没有需要完成的单词关卡。");
+    return;
+  }
+  activeVocabularySession.xp ||= 0;
+  activeVocabularySession.hints ||= {};
+  activeVocabularySession.updatedAt = new Date().toISOString();
+  vocabularyStartedAt = Date.now() - (activeVocabularySession.elapsedSeconds || 0) * 1000;
+  vocabularyHintLevel = 0;
+  vocabularyAnswerChecked = false;
+  state.currentVocabularySession = clone(activeVocabularySession);
+  saveState();
+  showScreen("vocabularyGameScreen");
+  renderVocabularyStep();
+  startVocabularyTimer();
+}
+
+function startVocabularyTimer() {
+  window.clearInterval(vocabularyTimerId);
+  vocabularyTimerId = window.setInterval(() => {
+    if (!activeVocabularySession) return;
+    activeVocabularySession.elapsedSeconds = Math.floor((Date.now() - vocabularyStartedAt) / 1000);
+  }, 1000);
+}
+
+function vocabularyItemForStep(step) {
+  return allVocabularyItems().find((item) => item.id === step.wordId);
+}
+
+function vocabularyInputMarkup(step) {
+  if (step.mode === "recognition") {
+    return `<div class="vocab-choice-list">${step.options.map((option, index) => `
+      <label>
+        <input type="radio" name="vocabAnswer" value="${escapeHtml(option)}">
+        <span>${String.fromCharCode(65 + index)}</span>
+        <strong>${escapeHtml(option)}</strong>
+      </label>`).join("")}</div>`;
+  }
+  if (step.mode === "usage") {
+    const pattern = /[A-Za-z]_{3,}|_{3,}/;
+    const match = step.prompt.match(pattern);
+    const parts = step.prompt.split(pattern);
+    const input = `<label class="inline-blank vocab-inline-blank"><span class="sr-only">填写答案</span><input id="vocabTextAnswer" type="text" autocomplete="off" autocapitalize="none" spellcheck="false"></label>`;
+    return `<h2 class="vocab-usage-sentence">${match
+      ? `${escapeHtml(parts[0])}${input}${escapeHtml(parts.slice(1).join(match[0]))}`
+      : `${escapeHtml(step.prompt)} ${input}`}</h2>`;
+  }
+  return `
+    <p class="vocab-spelling-prompt">${escapeHtml(step.prompt)}</p>
+    <label class="vocab-spelling-input">
+      <span class="sr-only">拼写单词</span>
+      <input id="vocabTextAnswer" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="在这里完整拼写">
+    </label>`;
+}
+
+function speakVocabularyWord(word) {
+  if (!("speechSynthesis" in window)) {
+    showNotice("当前浏览器暂不支持朗读，请参考音标和例句。");
+    return;
+  }
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(word);
+  utterance.lang = "en-US";
+  utterance.rate = 0.82;
+  window.speechSynthesis.speak(utterance);
+}
+
+function renderVocabularyStep() {
+  const session = activeVocabularySession;
+  const step = session.steps[session.activeIndex];
+  const item = vocabularyItemForStep(step);
+  vocabularyHintLevel = session.hints?.[step.id] || 0;
+  vocabularyAnswerChecked = false;
+  elements.vocabStageLabel.textContent = step.boss ? "终极挑战" : step.title;
+  elements.vocabStepCounter.textContent = `${session.activeIndex + 1} / ${session.steps.length}`;
+  elements.vocabProgressBar.style.width = `${((session.activeIndex + 1) / session.steps.length) * 100}%`;
+  elements.vocabXpLabel.textContent = `${session.xp || 0} XP`;
+  elements.vocabFeedback.textContent = "";
+  elements.vocabFeedback.className = "vocab-feedback";
+  elements.vocabHintButton.classList.toggle("hidden", step.mode === "learn");
+  elements.vocabContinueButton.textContent = step.mode === "learn" ? "我记住了，继续" : "检查答案";
+  elements.vocabChallengeCard.innerHTML = step.mode === "learn"
+    ? `
+      <div class="vocab-card-label">NEW WORD</div>
+      <button class="vocab-speak-button" type="button" aria-label="朗读 ${escapeHtml(item.word)}">播放发音</button>
+      <h2>${escapeHtml(item.word)}</h2>
+      <p class="vocab-phonetic">${escapeHtml(item.phonetic || "点击“播放发音”听读音")}</p>
+      <strong class="vocab-meaning">${escapeHtml(item.meaningZh)}</strong>
+      <div class="vocab-example">
+        <p>${escapeHtml(item.example)}</p>
+        <span>${escapeHtml(item.exampleZh)}</span>
+      </div>
+      <small>${escapeHtml(item.collocations || item.commonMistake || "留意它在句子中的位置和词形。")}</small>`
+    : `
+      <div class="vocab-card-label">${step.boss ? "BOSS ROUND" : escapeHtml(step.title.toUpperCase())}</div>
+      <span class="vocab-word-source">${escapeHtml(item.sourceWeek || "家长词库")}${item.sourceDay ? ` · DAY ${item.sourceDay}` : ""}</span>
+      ${step.mode === "usage" ? "" : `<h2>${step.mode === "recognition" ? escapeHtml(item.word) : "完整拼写"}</h2>`}
+      ${vocabularyInputMarkup(step)}
+      <div id="vocabHintCopy" class="vocab-hint-copy"></div>`;
+  elements.vocabChallengeCard.querySelector(".vocab-speak-button")?.addEventListener(
+    "click",
+    () => speakVocabularyWord(item.word),
+  );
+  elements.vocabChallengeCard.querySelectorAll("input").forEach((input) => {
+    input.addEventListener("input", () => {
+      elements.vocabFeedback.textContent = "";
+      vocabularyAnswerChecked = false;
+      elements.vocabContinueButton.textContent = "检查答案";
+    });
+    input.addEventListener("change", () => {
+      elements.vocabFeedback.textContent = "";
+      vocabularyAnswerChecked = false;
+      elements.vocabContinueButton.textContent = "检查答案";
+    });
+  });
+  window.setTimeout(() => elements.vocabChallengeCard.querySelector("input")?.focus(), 80);
+}
+
+function currentVocabularyAnswer() {
+  const choice = elements.vocabChallengeCard.querySelector('input[name="vocabAnswer"]:checked');
+  const input = elements.vocabChallengeCard.querySelector("#vocabTextAnswer");
+  return (choice?.value ?? input?.value ?? "").trim();
+}
+
+function showVocabularyHint() {
+  const step = activeVocabularySession?.steps[activeVocabularySession.activeIndex];
+  const item = vocabularyItemForStep(step);
+  if (!step || step.mode === "learn") return;
+  vocabularyHintLevel = Math.min(3, vocabularyHintLevel + 1);
+  activeVocabularySession.hints[step.id] = vocabularyHintLevel;
+  const hints = [
+    `首字母是 “${item.word[0].toUpperCase()}”，共 ${item.word.length} 个字母。`,
+    item.commonMistake || item.collocations || `想一想例句中的词形和位置。`,
+    `例句提示：${item.exampleZh}`,
+  ];
+  elements.vocabChallengeCard.querySelector("#vocabHintCopy").textContent =
+    hints[vocabularyHintLevel - 1];
+  activeVocabularySession.updatedAt = new Date().toISOString();
+  state.currentVocabularySession = clone(activeVocabularySession);
+  saveState();
+}
+
+function recordVocabularyError(step, answer) {
+  const already = activeVocabularySession.errors.some(
+    (error) => error.stepId === step.id && error.answer === answer,
+  );
+  if (!already) {
+    activeVocabularySession.errors.push({
+      stepId: step.id,
+      wordId: step.wordId,
+      mode: step.mode,
+      answer,
+      at: new Date().toISOString(),
+    });
+  }
+}
+
+function addBossRound() {
+  if (activeVocabularySession.bossAdded) return false;
+  const failedWordIds = [...new Set(activeVocabularySession.errors.map((error) => error.wordId))]
+    .slice(0, 5);
+  if (!failedWordIds.length) return false;
+  const bossSteps = failedWordIds.map((wordId, index) => {
+    const original = [...activeVocabularySession.steps]
+      .reverse()
+      .find((step) => step.wordId === wordId && ["spelling", "usage"].includes(step.mode));
+    return {
+      ...original,
+      id: `${original.id}:boss`,
+      boss: true,
+      title: "终极挑战",
+      mode: index % 2 === 0 ? "spelling" : original.mode,
+    };
+  });
+  activeVocabularySession.steps.push(...bossSteps);
+  activeVocabularySession.bossAdded = true;
+  return true;
+}
+
+function advanceVocabularyStep() {
+  activeVocabularySession.activeIndex += 1;
+  if (activeVocabularySession.activeIndex >= activeVocabularySession.steps.length) {
+    if (addBossRound()) {
+      activeVocabularySession.updatedAt = new Date().toISOString();
+      state.currentVocabularySession = clone(activeVocabularySession);
+      saveState();
+      renderVocabularyStep();
+      return;
+    }
+    completeVocabularySession();
+    return;
+  }
+  activeVocabularySession.updatedAt = new Date().toISOString();
+  state.currentVocabularySession = clone(activeVocabularySession);
+  saveState();
+  renderVocabularyStep();
+}
+
+function handleVocabularyContinue() {
+  const step = activeVocabularySession.steps[activeVocabularySession.activeIndex];
+  if (step.mode === "learn" || vocabularyAnswerChecked) {
+    advanceVocabularyStep();
+    return;
+  }
+  const answer = currentVocabularyAnswer();
+  if (!answer) {
+    elements.vocabFeedback.textContent = "先完成答案，再继续闯关。";
+    elements.vocabFeedback.className = "vocab-feedback incorrect";
+    return;
+  }
+  const correct = VocabularyEngine.isAnswerCorrect(answer, step);
+  if (!correct) {
+    recordVocabularyError(step, answer);
+    activeVocabularySession.updatedAt = new Date().toISOString();
+    state.currentVocabularySession = clone(activeVocabularySession);
+    saveState();
+    elements.vocabFeedback.textContent =
+      vocabularyHintLevel < 2 ? "还差一点。检查拼写或词形，再试一次。" : "再读一遍句子，答案还没有完整显示出来。";
+    elements.vocabFeedback.className = "vocab-feedback incorrect";
+    showVocabularyHint();
+    return;
+  }
+  activeVocabularySession.answers[step.id] = answer;
+  activeVocabularySession.xp += step.boss ? 20 : step.mode === "recognition" ? 5 : 10;
+  activeVocabularySession.updatedAt = new Date().toISOString();
+  vocabularyAnswerChecked = true;
+  elements.vocabFeedback.textContent = step.boss ? "终极挑战通过！" : "答对了，这一分来自真正的回忆。";
+  elements.vocabFeedback.className = "vocab-feedback correct";
+  elements.vocabContinueButton.textContent = "进入下一关";
+}
+
+function updateAssessmentFromVocabulary(session, completedAt) {
+  const items = new Map(allVocabularyItems().map((item) => [item.id, item]));
+  const failed = new Map();
+  session.errors.forEach((error) => {
+    const current = failed.get(error.wordId) || { spelling: 0, usage: 0, answer: "" };
+    current[error.mode] = (current[error.mode] || 0) + 1;
+    current.answer = error.answer;
+    failed.set(error.wordId, current);
+  });
+  failed.forEach((error, wordId) => {
+    const item = items.get(wordId);
+    if (!item) return;
+    const knowledgeId = `word:${VocabularyEngine.normalizeWord(item.word)}`;
+    const profile = state.profiles[knowledgeId] || {
+      knowledgeId,
+      label: item.word,
+      category: error.spelling >= error.usage ? "spelling" : "collocation",
+      attempts: 0,
+      errors: 0,
+      recentErrorStreak: 0,
+      consecutiveCorrect: 0,
+      monthlyErrors: 0,
+      importance: 4,
+      manualAdjustment: 0,
+      independentCorrectStreak: 0,
+      masteryState: "learning",
+    };
+    profile.attempts += 1;
+    profile.errors += 1;
+    profile.recentErrorStreak += 1;
+    profile.consecutiveCorrect = 0;
+    profile.lastErrorAt = completedAt;
+    profile.lastTestedAt = completedAt;
+    profile.typicalWrongAnswer = error.answer;
+    profile.masteryState = "learning";
+    profile.nextRetestAt = new Date(new Date(completedAt).getTime() + 86400000).toISOString();
+    state.profiles[knowledgeId] = profile;
+    const queued = state.morningReviewQueue.find((queuedItem) => queuedItem.knowledgeId === knowledgeId);
+    const queueItem = queued || { knowledgeId, errorCount: 0 };
+    Object.assign(queueItem, {
+      label: item.word,
+      category: profile.category,
+      errorType: error.spelling >= error.usage ? "spelling" : "usage",
+      typicalWrongAnswer: error.answer,
+      sourcePrompt: item.usagePrompt,
+      suggestedPrompt: item.usagePrompt,
+      lastErrorAt: completedAt,
+      errorCount: (queueItem.errorCount || 0) + 1,
+      suggestedPractice: error.spelling >= error.usage
+        ? "看中文拼写＋句中补全"
+        : "换句语境＋词形辨析",
+    });
+    if (!queued) state.morningReviewQueue.push(queueItem);
+  });
+  state.morningReviewQueue = state.morningReviewQueue.slice(0, 12);
+}
+
+function completeVocabularySession() {
+  window.clearInterval(vocabularyTimerId);
+  const completedAt = new Date().toISOString();
+  activeVocabularySession.elapsedSeconds = Math.max(
+    1,
+    Math.floor((Date.now() - vocabularyStartedAt) / 1000),
+  );
+  activeVocabularySession.completed = true;
+  activeVocabularySession.completedAt = completedAt;
+  activeVocabularySession.updatedAt = completedAt;
+  const challengeSteps = activeVocabularySession.steps.filter((step) =>
+    ["recognition", "spelling", "usage"].includes(step.mode),
+  );
+  const failedIds = new Set(activeVocabularySession.errors.map((error) => error.stepId));
+  const accuracy = Math.round(
+    ((challengeSteps.length - failedIds.size) / Math.max(challengeSteps.length, 1)) * 100,
+  );
+  activeVocabularySession.stars = accuracy >= 90 ? 3 : accuracy >= 70 ? 2 : 1;
+  activeVocabularySession.accuracy = accuracy;
+  state.vocabularyProgress = VocabularyEngine.updateProgress(
+    state.vocabularyProgress,
+    activeVocabularySession,
+    Date.now(),
+  );
+  updateAssessmentFromVocabulary(activeVocabularySession, completedAt);
+  state.vocabularySessions.push(clone(activeVocabularySession));
+  state.currentVocabularySession = null;
+  saveState();
+  renderVocabularyResult(activeVocabularySession);
+  showScreen("vocabularyResultScreen");
+  syncStateToCloud();
+}
+
+function renderVocabularyResult(session) {
+  const items = new Map(allVocabularyItems().map((item) => [item.id, item]));
+  const failedWordIds = [...new Set(session.errors.map((error) => error.wordId))];
+  elements.vocabResultStars.textContent = "★".repeat(session.stars) + "☆".repeat(3 - session.stars);
+  elements.vocabResultSummary.textContent =
+    `完成 ${session.itemIds.length} 个单词，用时 ${formatDuration(session.elapsedSeconds)}，获得 ${session.xp} XP。`;
+  elements.vocabResultWords.innerHTML = `
+    <article>
+      <span>今天留下来的</span>
+      <strong>${session.itemIds.filter((id) => !failedWordIds.includes(id)).map((id) => escapeHtml(items.get(id)?.word)).join("、") || "今天主要完成了强化练习"}</strong>
+    </article>
+    <article>
+      <span>还会再遇见</span>
+      <strong>${failedWordIds.map((id) => escapeHtml(items.get(id)?.word)).join("、") || "没有错词，状态很稳"}</strong>
+      <small>${failedWordIds.length ? "这些词会按记忆周期再次出现，也会进入周测和晨读巩固候选。" : "继续保持跨日拼写和语境练习。"}</small>
+    </article>`;
+}
+
+async function requestVocabularyCards(words, alternateSense = false) {
+  const { data, error } = await supabaseClient.functions.invoke("generate-vocabulary-cards", {
+    body: {
+      words,
+      alternateSense,
+      existingWords: allVocabularyItems().map((item) => item.word),
+    },
+  });
+  if (error) throw error;
+  if (!Array.isArray(data?.cards)) throw new Error("AI 返回的学习卡格式不正确");
+  return data.cards;
+}
+
+async function generateVocabularyCards(wordsOverride = null, alternateSense = false) {
+  if (currentRole !== "parent") return;
+  const words = wordsOverride || VocabularyEngine.parseWordInput(elements.manualWordInput.value);
+  if (!words.length) {
+    elements.wordGenerationStatus.textContent = "请先输入至少一个英文单词。";
+    return;
+  }
+  const existing = new Set(allVocabularyItems().map((item) =>
+    VocabularyEngine.normalizeWord(item.word),
+  ));
+  const requested = words.filter((word) => alternateSense || !existing.has(word));
+  if (!requested.length) {
+    elements.wordGenerationStatus.textContent = "这些单词已经在词库中，不需要重复加入。";
+    return;
+  }
+  elements.generateWordsButton.disabled = true;
+  elements.wordGenerationStatus.textContent = `正在生成并审校 ${requested.length} 张学习卡…`;
+  state.pendingVocabularyWords = [...new Set([...state.pendingVocabularyWords, ...requested])];
+  saveState();
+  try {
+    const cards = await requestVocabularyCards(requested, alternateSense);
+    const now = new Date().toISOString();
+    const validCards = cards.map((card) => ({
+      ...card,
+      id: `draft:${VocabularyEngine.normalizeWord(card.word)}:${Date.now()}`,
+      sourceType: "parent",
+      status: "pending-confirmation",
+      reviewStatus: "ai-reviewed",
+      createdAt: now,
+      updatedAt: now,
+    })).filter((card) => !VocabularyEngine.validateVocabularyItem(card).length);
+    if (validCards.length !== requested.length) {
+      throw new Error("部分学习卡没有通过本地质量检查，请重新生成");
+    }
+    state.generatedWordDrafts = mergeById(validCards, state.generatedWordDrafts);
+    state.pendingVocabularyWords = state.pendingVocabularyWords.filter(
+      (word) => !requested.includes(word),
+    );
+    elements.manualWordInput.value = "";
+    elements.wordGenerationStatus.textContent = "生成和审校完成，请快速确认后加入。";
+    saveState();
+    renderVocabularyManager();
+  } catch (error) {
+    elements.wordGenerationStatus.textContent =
+      `暂时没有生成成功：${error.message}。词表已经保留，可以稍后重试。`;
+  } finally {
+    elements.generateWordsButton.disabled = false;
+  }
+}
+
+function confirmVocabularyDraft(draftId) {
+  const draft = state.generatedWordDrafts.find((item) => item.id === draftId);
+  if (!draft) return;
+  const errors = VocabularyEngine.validateVocabularyItem(draft);
+  if (errors.length) {
+    showNotice(`这张学习卡暂不能启用：${errors.join("；")}`);
+    return;
+  }
+  const now = new Date().toISOString();
+  const item = {
+    ...draft,
+    id: `manual:${VocabularyEngine.normalizeWord(draft.word)}`,
+    status: "active",
+    reviewStatus: "ai-reviewed-parent-confirmed",
+    confirmedAt: now,
+    updatedAt: now,
+    availableAt: now,
+  };
+  state.vocabularyItems = mergeById([item], state.vocabularyItems);
+  state.generatedWordDrafts = state.generatedWordDrafts.filter((entry) => entry.id !== draftId);
+  saveState();
+  renderVocabularyManager();
+  showNotice(`${item.word} 已加入 NELSON 的单词地图。`);
+}
+
+async function regenerateVocabularyDraft(draftId) {
+  const draft = state.generatedWordDrafts.find((item) => item.id === draftId);
+  if (!draft) return;
+  state.generatedWordDrafts = state.generatedWordDrafts.filter((item) => item.id !== draftId);
+  saveState();
+  renderVocabularyManager();
+  await generateVocabularyCards([draft.word], true);
+}
+
+function renderVocabularyManager() {
+  const active = state.vocabularyItems.filter((item) => item.status === "active");
+  elements.vocabularyLibraryCount.textContent = `${active.length} 个`;
+  elements.wordGenerationStatus.textContent ||= state.pendingVocabularyWords.length
+    ? `有 ${state.pendingVocabularyWords.length} 个单词等待重新生成。`
+    : "";
+  elements.generatedWordPreview.innerHTML = state.generatedWordDrafts.length
+    ? `<h4>等待家长确认</h4>${state.generatedWordDrafts.map((card) => `
+      <article>
+        <div class="generated-card-head">
+          <div><strong>${escapeHtml(card.word)}</strong><span>${escapeHtml(card.phonetic || "")} · ${escapeHtml(card.partOfSpeech || "")}</span></div>
+          <b>AI 已审校</b>
+        </div>
+        <p>${escapeHtml(card.meaningZh)}</p>
+        <blockquote>${escapeHtml(card.example)}<small>${escapeHtml(card.exampleZh)}</small></blockquote>
+        <em>${escapeHtml(card.commonMistake || card.collocations || "")}</em>
+        <div>
+          <button data-regenerate-word="${escapeHtml(card.id)}">换一个含义</button>
+          <button class="confirm-word" data-confirm-word="${escapeHtml(card.id)}">确认加入</button>
+        </div>
+      </article>`).join("")}`
+    : "";
+  elements.vocabularyLibraryList.innerHTML = active.length
+    ? `<h4>家长已加入</h4>${active.map((item) => `
+      <article>
+        <div><strong>${escapeHtml(item.word)}</strong><small>${escapeHtml(item.meaningZh)}</small></div>
+        <button data-disable-word="${escapeHtml(item.id)}">停用</button>
+      </article>`).join("")}`
+    : `<p class="empty-copy">还没有家长手动加入的单词。晨读单词已经自动进入 NELSON 的地图。</p>`;
+  elements.generatedWordPreview.querySelectorAll("[data-confirm-word]").forEach((button) => {
+    button.addEventListener("click", () => confirmVocabularyDraft(button.dataset.confirmWord));
+  });
+  elements.generatedWordPreview.querySelectorAll("[data-regenerate-word]").forEach((button) => {
+    button.addEventListener("click", () => regenerateVocabularyDraft(button.dataset.regenerateWord));
+  });
+  elements.vocabularyLibraryList.querySelectorAll("[data-disable-word]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const item = state.vocabularyItems.find((entry) => entry.id === button.dataset.disableWord);
+      if (!item) return;
+      item.status = "inactive";
+      item.updatedAt = new Date().toISOString();
+      saveState();
+      renderVocabularyManager();
+    });
+  });
 }
 
 function startExam(type) {
@@ -1152,6 +1836,7 @@ function renderParent() {
   renderRecommendations();
   renderChanges();
   renderDraft();
+  renderVocabularyManager();
 }
 
 function renderParentAnalysis() {
@@ -1274,6 +1959,14 @@ function renderDraft() {
 
 elements.startWeeklyButton.addEventListener("click", () => startExam("weekly"));
 elements.startMonthlyButton.addEventListener("click", () => startExam("monthly"));
+elements.startVocabularyButton.addEventListener("click", startVocabularySession);
+elements.vocabHintButton.addEventListener("click", showVocabularyHint);
+elements.vocabContinueButton.addEventListener("click", handleVocabularyContinue);
+elements.finishVocabularyButton.addEventListener("click", () => {
+  activeVocabularySession = null;
+  showScreen("vocabularyScreen");
+});
+elements.generateWordsButton.addEventListener("click", () => generateVocabularyCards());
 elements.spacedReviewCard.addEventListener("click", startSpacedReview);
 elements.previousQuestionButton.addEventListener("click", () => goQuestion(-1));
 elements.nextQuestionButton.addEventListener("click", () => goQuestion(1));
@@ -1295,6 +1988,21 @@ elements.backButton.addEventListener("click", () => {
   if (document.querySelector("#examScreen.active")) {
     persistCurrentAnswer();
     pauseExamTimer();
+  }
+  if (document.querySelector("#vocabularyGameScreen.active") && activeVocabularySession) {
+    activeVocabularySession.elapsedSeconds = Math.floor((Date.now() - vocabularyStartedAt) / 1000);
+    activeVocabularySession.updatedAt = new Date().toISOString();
+    state.currentVocabularySession = clone(activeVocabularySession);
+    saveState();
+    window.clearInterval(vocabularyTimerId);
+    activeVocabularySession = null;
+    showScreen("vocabularyScreen");
+    return;
+  }
+  if (document.querySelector("#vocabularyResultScreen.active")) {
+    activeVocabularySession = null;
+    showScreen("vocabularyScreen");
+    return;
   }
   showScreen("studentHome");
 });
@@ -1355,6 +2063,12 @@ elements.loginForm.addEventListener("submit", async (event) => {
 });
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
+    if (activeVocabularySession) {
+      activeVocabularySession.elapsedSeconds = Math.floor((Date.now() - vocabularyStartedAt) / 1000);
+      activeVocabularySession.updatedAt = new Date().toISOString();
+      state.currentVocabularySession = clone(activeVocabularySession);
+      saveState();
+    }
     persistCurrentAnswer();
     pauseExamTimer();
     syncStateToCloud();
@@ -1364,6 +2078,12 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 window.addEventListener("pagehide", () => {
+  if (activeVocabularySession) {
+    activeVocabularySession.elapsedSeconds = Math.floor((Date.now() - vocabularyStartedAt) / 1000);
+    activeVocabularySession.updatedAt = new Date().toISOString();
+    state.currentVocabularySession = clone(activeVocabularySession);
+    saveState();
+  }
   persistCurrentAnswer();
   pauseExamTimer();
   syncStateToCloud();

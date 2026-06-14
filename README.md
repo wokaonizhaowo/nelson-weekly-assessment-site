@@ -25,6 +25,10 @@ python3 -m http.server 4173
 - 知识点级错误次数、错误率、近期连续错误、月考错误及连续答对降权。
 - 家长复习建议附带证据、典型错误和具体训练动作。
 - 家长可调节优先级，并把知识点加入下周试卷草稿。
+- 每日单词地图包含认识、辨认、拼写、语境和终极挑战，约 10 个词。
+- 晨读词按学习日开放，拼写与用法必须跨日答对才算真正掌握。
+- 背词错项会进入后续周测候选和下一周晨读巩固队列。
+- 家长只需输入英文单词，AI 自动补齐并审校学习卡，确认后才会启用。
 
 ## Supabase 云端同步
 
@@ -55,8 +59,12 @@ python3 "../../Nelson晨读自动化/模板/fetch_assessment_review.py"
 
 ```bash
 node engine.test.js
+node vocabulary-engine.test.js
 python3 content_quality_test.py
 ```
+
+家长自动生成学习卡还需要部署 Supabase Edge Function，步骤见
+`SUPABASE-VOCABULARY-SETUP.md`。
 
 ## 与晨读自动化联动
 
